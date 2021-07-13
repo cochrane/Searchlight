@@ -15,6 +15,8 @@
 // strandtest example for more information on possible values.
 Adafruit_NeoPixel pixels(NUMPIXELS, PIN_LED, NEO_GRB + NEO_KHZ800);
 
+void writeRGB(uint8_t r, uint8_t g, uint8_t b);
+
 /*
    Pin 1,2,3: Reserved for serial connection
    Pin 4/Arduino 2/PD2/Int0: Handles DCC
@@ -118,12 +120,26 @@ ISR(TIMER0_COMPA_vect) {
   }
 }
 
+/*
+ * Weird work-around.
+ * The Adafruit Neopixel library uses micros() to check that enough time has elapsed before switching. However,
+ * the normal Arduino/Wiring "micros()" command uses timer1 or timer0 but we're using both for other purposes.
+ * Since the rest of the code ensures that the switching on doesn't happen that often anyway, we're delivering
+ * dummy values that trick the library into just submitting things.
+ * Long-term we need to modify or replace the library
+ */
+unsigned long micros() {
+  static uint8_t counter = 0;
+  return 400 * (counter++);
+}
+
 enum DecoderMode {
   DECODER_MODE_OPERATION = 0,
   DECODER_MODE_RESET_RECEIVED,
-  DECODER_MODE_PROGRAMMING
+  DECODER_MODE_PROGRAMMING,
+  DECODER_MODE_SENDING_ACK
 };
-DecoderMode decoderMode = DECODER_MODE_OPERATION;
+volatile DecoderMode decoderMode = DECODER_MODE_OPERATION;
 
 // WAIT_TIME_ACK: (8 Mhz / 1024) * 6 ms
 // 1024 is from prescaler
@@ -131,29 +147,17 @@ DecoderMode decoderMode = DECODER_MODE_OPERATION;
 
 // Timer1 has fired.
 ISR(TIMER1_COMPA_vect) {
-  if (decoderMode == DECODER_MODE_PROGRAMMING) {
-    for (int i = 0; i < NUM_VERIFY_PIXELS; i++) {
-      pixels.setPixelColor(i, pixels.Color(0, 0, 0));
-    }
-    pixels.show();
+  TCNT1 = 0;
+  if (decoderMode == DECODER_MODE_SENDING_ACK) {
     TCCR1 = 0; // Stop timer
+    pixels.clear();
+    pixels.show();
+    decoderMode = DECODER_MODE_PROGRAMMING;
   }
 }
 
 uint8_t addressEeprom EEMEM = 3;
 uint8_t address = 0;
-
-uint8_t lastR = 0xFF, lastG = 0xFF, lastB = 0xFF;
-void writeRGB(uint8_t r, uint8_t g, uint8_t b) {
-  if (r == lastR && g == lastG && b == lastB) {
-    return;
-  }
-  lastR = r;
-  lastG = g;
-  lastB = b;
-  pixels.setPixelColor(0, pixels.Color(r, g, b));
-  pixels.show();
-}
 
 void setup() {
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
@@ -170,18 +174,15 @@ void setup() {
   TCNT0 = 0;
   TCCR0A = 0;// Normal mode
   TCCR0B = (1 << CS01); // Clock/8
-  TIMSK = (1 << OCIE0A); // Interrupts on
+  TIMSK = (1 << OCIE0A) | (1 << OCIE1A); // Interrupts on
 
   // DCC Input interrupt
   MCUCR |= (1 << ISC01); // INT0 fires on falling edge
   GIMSK |= (1 << INT0);// Int0 is enabled
   
   interrupts();
-  for (int i = 0; i < NUMPIXELS; i++) {
-    pixels.setPixelColor(i, pixels.Color(0, 0, 0));
-  }
+  pixels.clear();
   pixels.show();
-  writeRGB(0, 0, 0);
 }
 
 bool hasCv(uint16_t cvIndex) {
@@ -216,12 +217,16 @@ void sendProgrammingAck() {
     pixels.setPixelColor(i, pixels.Color(255, 255, 255));
   }
   pixels.show();
+
+  decoderMode = DECODER_MODE_SENDING_ACK;
   
   // Timer 1: Turn off increased power after 5-7 ms
   OCR1A = WAIT_TIME_ACK;
   TCNT1 = 0;
   TCCR1 = (1 << CTC1) | (1 << CS13) | (1 << CS11) | (1 << CS10); // Normal mode, clear on OCR1A match, run immediately with CLK/1024
   TIMSK |= (1 << OCIE1A); // Interrupts on
+
+  interrupts();
 }
 
 uint16_t pagedModePage = 1;
@@ -326,6 +331,9 @@ uint8_t lastReadMessageNumber = 0;
 int8_t currentSpeed = 0;
 bool currentDirection = false;
 bool lightOn = false;
+bool f1 = false;
+bool f2 = false;
+bool f3 = false;
 
 void loop() {
   if (lastReadMessageNumber != currentMessageNumber) {
@@ -339,21 +347,25 @@ void loop() {
       return;
     }
 
+    if (decoderMode == DECODER_MODE_SENDING_ACK) {
+      // There's an ACK currently going out so ignore all messages (which are just other "Programming" messages anyway)
+      return;
+    }
+
     if (dccMessage.length == 3 && dccMessage.data[0] == 0 && dccMessage.data[1] == 0) {
       // General reset command
-      for (int i = 0; i < NUMPIXELS; i++) {
-        pixels.setPixelColor(i, pixels.Color(0, 0, 0));
-      }
-      pixels.show();
-      lastProgrammingMessage.length = 0;
       if (decoderMode == DECODER_MODE_OPERATION) {
+        //DEBUG should be clear instead
+        pixels.clear();
+        pixels.show();
+        lastProgrammingMessage.length = 0;
         decoderMode = DECODER_MODE_RESET_RECEIVED;
       }
       return;
     }
 
     if (decoderMode != DECODER_MODE_OPERATION && (dccMessage.data[0] & 0xF0) == 0x70) {
-      decoderMode == DECODER_MODE_PROGRAMMING;
+      decoderMode = DECODER_MODE_PROGRAMMING;
       processProgrammingMessage();
       return;
     }
@@ -365,7 +377,7 @@ void loop() {
       // Short address
       addressLength = 1;
       messageAddress = dccMessage.data[0];
-    } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0 == 0xC0)) {
+    } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0xC0) {
       // Long address
       addressLength = 2;
       messageAddress = dccMessage.data[1] | (uint16_t(dccMessage.data[0] & 0x3F) << 8);
@@ -382,7 +394,7 @@ void loop() {
       // But! The first G is the last G
       // (they later used the free bit after R to give one bit more precision for G, and the bit was freed because they rethought how functions work).
       currentSpeed = ((dccMessage.data[addressLength] & 0xF) << 1) | ((dccMessage.data[addressLength] & 0x10) >> 4);
-      currentSpeed << 2; // Super, super simple mapping to 127 steps, yes it won't reach 127, I don't care this is debug only
+      currentSpeed = currentSpeed << 2; // Super, super simple mapping to 127 steps, yes it won't reach 127, I don't care this is debug only
       currentDirection = (dccMessage.data[addressLength] & 0x20) == 0x20;
     } else if (dccMessage.length == addressLength + 3 && dccMessage.data[addressLength] == 0x3F) {
       // 127 step speed packet 0011-1111 RGGG-GGGG
@@ -393,18 +405,26 @@ void loop() {
       currentSpeed = dccMessage.data[addressLength + 1] & 0x7F;
       currentDirection = (dccMessage.data[addressLength + 1] & 0x80) == 0x80;
       lightOn = (dccMessage.data[addressLength + 2] & 0x01) == 0x01;
+      f1 = (dccMessage.data[addressLength + 2] & 0x02) == 0x02;
+      f2 = (dccMessage.data[addressLength + 2] & 0x04) == 0x04;
+      f3 = (dccMessage.data[addressLength + 2] & 0x08) == 0x08;
     } else if (dccMessage.length == addressLength + 2 && (dccMessage.data[addressLength] & 0xE0) == 0x80) {
       // Functions F0-F4 100D-DDDD, with bit0 = F1, bit3 = F4, bit4 = F0 for some reason
       lightOn = (dccMessage.data[addressLength] & 0x10) == 0x10;
+      f1 = (dccMessage.data[addressLength] & 0x01) == 0x01;
+      f2 = (dccMessage.data[addressLength] & 0x02) == 0x02;
+      f3 = (dccMessage.data[addressLength] & 0x04) == 0x04;
     } else {
       return;
     }
     
     if (currentDirection) {
-      writeRGB(0, currentSpeed, lightOn ? 20 : 0);
+      pixels.setPixelColor(0, pixels.Color(0, currentSpeed, lightOn ? 20 : 0));
     } else {
-      writeRGB(currentSpeed, 0, lightOn ? 20 : 0);
+      pixels.setPixelColor(0, pixels.Color(currentSpeed, 0, lightOn ? 20 : 0));
     }
+    pixels.setPixelColor(1, f1 ? 20 : 0, f2 ? 20 : 0, f3 ? 20 : 0);
+    pixels.show();
   } else {
     MCUCR |= (1 << SE); // Sleep enable, sleep mode 000 = Idle
     sleep_cpu();
