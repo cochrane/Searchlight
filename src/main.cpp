@@ -1,6 +1,9 @@
 #include <Adafruit_NeoPixel.h>
+#include <avr/interrupt.h>
 #include <avr/sleep.h>
 #include <avr/eeprom.h>
+
+#include "dccdecode.h"
 
 // Which pin on the Arduino is connected to the NeoPixels?
 #define PIN_LED        3
@@ -15,110 +18,19 @@
 // strandtest example for more information on possible values.
 Adafruit_NeoPixel pixels(NUMPIXELS, PIN_LED, NEO_GRB + NEO_KHZ800);
 
-void writeRGB(uint8_t r, uint8_t g, uint8_t b);
-
 /*
-   Pin 1,2,3: Reserved for serial connection
-   Pin 4/Arduino 2/PD2/Int0: Handles DCC
-   Pin 15/Arduino 9/PB1/OC1A: Servo output
-   Pin 24/Arduino A1/PC1/PCINT9: Input, move servo left
-   Pin 25/Arduino A2/PC2/PCINT10: Input, move servo right
-   Pin 26/Arduino A3/PC3/PCINT11: Input, programming mode
+   PB2: DCC Input
+   PB3: LED Output
    Timer 0: Handles DCC
-   Timer 1: Handles servo output
+   Timer 1: Handles animation, ack pulse
 */
 
 // INT0 pin is DCC
 // That is to say pin 4, Arduino 2, PCINT18, PD2
 const uint8_t ARDUINO_PIN_DCC_IN = 2;
 
-const uint8_t DCC_TIME_ONE = 58;
-const uint8_t DCC_TIME_ZERO = 100;
-const uint8_t WAIT_TIME = (uint16_t(DCC_TIME_ONE) + uint16_t(DCC_TIME_ZERO)) / 2;
-
-const uint16_t DCC_ADDRESS = 10;
-
-enum DccReceiveState {
-   // We are waiting for >= 10 bits that are all 1.
-   // Any 0 bit before that resets the count
-   // After ten 1s, a 0 is the first separator and indicates that the actual message bytes are following
-  DCC_RECEIVE_STATE_PREAMBLE = 0,
-  // Waiting for bits for the current byte to come in, always exactly 8.
-  DCC_RECEIVE_STATE_BYTE_READING,
-  // Done with a byte, waiting for the separator bit.
-  // If it is 0, another byte follows; if it is 1, the message is over.
-  DCC_RECEIVE_STATE_AWAIT_SEPARATOR
-};
-volatile DccReceiveState receiveState;
-volatile uint8_t currentBit;
-struct DccMessage {
-  uint8_t length = 0;
-  uint8_t data[10];
-};
-volatile DccMessage dccMessage;
-volatile uint8_t currentMessageNumber = 0;
-
 // Message stored by the decoder in programming mode; length = 0 if not used.
 DccMessage lastProgrammingMessage;
-
-// Low on DCC in received.
-ISR(INT0_vect) {
-  // Start a timer
-  TCNT0 = 0;
-  TCCR0B = (1 << CS01); // Clock/8
-  OCR0A = WAIT_TIME;
-}
-
-// The timer started by ISR(INT0_vect) has fired.
-ISR(TIMER0_COMPA_vect) {
-  TCNT0 = 0;
-  OCR0A = WAIT_TIME;
-  TCCR0B = 0;
-
-  // Read bit value: If it's still low, then it was a long 0 wave; if it has changed to 1, it was a short 1 wave
-  bool bitValue = (PINB & (1 << PINB2)) != 0;
-  switch (receiveState) {
-    case DCC_RECEIVE_STATE_PREAMBLE:
-      if (bitValue) {
-        currentBit++;
-      } else {
-        if (currentBit >= 10) {
-          receiveState = DCC_RECEIVE_STATE_BYTE_READING;
-          dccMessage.length = 0;
-          dccMessage.data[0] = 0;
-        }
-        currentBit = 0;
-      }
-      break;
-    case DCC_RECEIVE_STATE_BYTE_READING:
-      dccMessage.data[dccMessage.length] = (dccMessage.data[dccMessage.length] << 1) | bitValue;
-      currentBit += 1;
-      if (currentBit == 8) {
-        receiveState = DCC_RECEIVE_STATE_AWAIT_SEPARATOR;
-      }
-      break;
-    case DCC_RECEIVE_STATE_AWAIT_SEPARATOR:
-      dccMessage.length += 1;
-      currentBit = 0;
-      if (bitValue) {
-        // End of packet
-        receiveState = DCC_RECEIVE_STATE_PREAMBLE;
-        currentMessageNumber += 1;
-      } else {
-        // Another byte follows
-        if (dccMessage.length >= sizeof(dccMessage.data)) {
-          // We can't store (nor process) the byte; ignore this message and wait for next preamble
-          receiveState = DCC_RECEIVE_STATE_PREAMBLE;
-          currentBit = 1;
-        } else {
-          dccMessage.data[dccMessage.length] = 0;
-          receiveState = DCC_RECEIVE_STATE_BYTE_READING;
-        }
-      }
-      break;
-
-  }
-}
 
 /*
  * Weird work-around.
@@ -165,24 +77,15 @@ void setup() {
   // Load address from EEPROM
   address = eeprom_read_byte(&addressEeprom);
 
-  // PB2: DCC Input  
-  PORTB &= ~(1 << PB2);
-  DDRB &= ~(1 << PB2);
-
   // Timer 0: Measures DCC signal
-  OCR0A = WAIT_TIME;
-  TCNT0 = 0;
-  TCCR0A = 0;// Normal mode
-  TCCR0B = (1 << CS01); // Clock/8
-  TIMSK = (1 << OCIE0A) | (1 << OCIE1A); // Interrupts on
+  setupDccTimer0();
 
-  // DCC Input interrupt
-  MCUCR |= (1 << ISC01); // INT0 fires on falling edge
-  GIMSK |= (1 << INT0);// Int0 is enabled
+  // DCC Input
+  setupDccInt0PB2();
   
-  interrupts();
   pixels.clear();
   pixels.show();
+  sei();
 }
 
 bool hasCv(uint16_t cvIndex) {
@@ -241,6 +144,10 @@ void processProgrammingMessage() {
     lastProgrammingMessage.data[i] = dccMessage.data[i];
   }
 
+  if (!matchesLastMessage) {
+    return;
+  }
+
   if (dccMessage.length == 3) {
     // Old register mode access
     uint8_t programmingRegister = (dccMessage.data[0] & 0x7) + 1;
@@ -253,6 +160,11 @@ void processProgrammingMessage() {
           pagedModePage = 256;
         }
         sendProgrammingAck();
+      } else {
+        // Read page mode page
+        if (dccMessage.data[2] == pagedModePage || (dccMessage.data[2] == 0 && pagedModePage == 256)) {
+          sendProgrammingAck();
+        }
       }
     } else {
       uint16_t cv = programmingRegister;
@@ -276,53 +188,58 @@ void processProgrammingMessage() {
     return;
   }
   
-  if (dccMessage.length != 4 || !matchesLastMessage) {
+  if (dccMessage.length != 4) {
     return;
   }
 
   uint16_t cv = ((dccMessage.data[0] & 0x3) << 8 | dccMessage.data[1]) + 1;
   
-  if ((dccMessage.data[0] & 0xC) == 0x4) {
-    // Verify byte
-    // Recommendation in RCN214: Never confirm for CVs we don't have
-    if (hasCv(cv) && getCvValue(cv) == dccMessage.data[2]) {
-      sendProgrammingAck();
-    }
-    
-  } else if ((dccMessage.data[0] & 0xC) == 0xC) {
-    // Write byte
-    if (writeCvValue(cv, dccMessage.data[2])) {
-      sendProgrammingAck();
-    }
-  } else if ((dccMessage.data[0] & 0xC) == 0x8 && (dccMessage.data[2] & 0xE0) == 0xE0) {
-    // Bit manipulation
-    uint8_t bitIndex = dccMessage.data[2] & 0x7;
-    uint8_t bitValue = (dccMessage.data[2] & 0x8) >> 3;
-    if ((dccMessage.data[2] & 0x10) == 0) {
-      // Verify bit
-      if (hasCv(cv)) {
-        uint8_t value = getCvValue(cv);
-        if ((value & (1 << bitIndex)) == (bitValue << bitIndex)) {
-          sendProgrammingAck();
-        }
-      } else {
-        // Recommendation in RCN214: Confirm any bit value for CVs we don't have
+  switch (dccMessage.data[0] & 0xC) {
+    case 0x4:
+      // Verify byte
+      // Recommendation in RCN214: Never confirm for CVs we don't have
+      if (hasCv(cv) && getCvValue(cv) == dccMessage.data[2]) {
         sendProgrammingAck();
       }
-    } else {
-      // Write bit
-      if (hasCv(cv)) {
-        uint8_t newValue = getCvValue(cv);
-        if (bitValue) {
-          newValue |= 1 << bitIndex;
+      break;
+    case 0xC:
+      // Write byte
+      if (writeCvValue(cv, dccMessage.data[2])) {
+        sendProgrammingAck();
+      }
+      break;
+    case 0x8:
+      if ((dccMessage.data[2] & 0xE0) == 0xE0) {
+        // Bit manipulation
+        uint8_t bitIndex = dccMessage.data[2] & 0x7;
+        uint8_t bitValue = (dccMessage.data[2] & 0x8) >> 3;
+        if ((dccMessage.data[2] & 0x10) == 0) {
+          // Verify bit
+          if (hasCv(cv)) {
+            uint8_t value = getCvValue(cv);
+            if (((value >> bitIndex) & 0x1) == bitValue) {
+              sendProgrammingAck();
+            }
+          } else {
+            // Recommendation in RCN214: Confirm any bit value for CVs we don't have
+            sendProgrammingAck();
+          }
         } else {
-          newValue = newValue & ~(1 << bitIndex);
-        }
-        if (writeCvValue(cv, newValue)) {
-          sendProgrammingAck();
+          // Write bit
+          if (hasCv(cv)) {
+            uint8_t newValue = getCvValue(cv);
+            if (bitValue) {
+              newValue |= 1 << bitIndex;
+            } else {
+              newValue = newValue & ~(1 << bitIndex);
+            }
+            if (writeCvValue(cv, newValue)) {
+              sendProgrammingAck();
+            }
+          }
         }
       }
-    }
+      break;
   }
 }
 
@@ -411,7 +328,7 @@ void loop() {
     } else if (dccMessage.length == addressLength + 2 && (dccMessage.data[addressLength] & 0xE0) == 0x80) {
       // Functions F0-F4 100D-DDDD, with bit0 = F1, bit3 = F4, bit4 = F0 for some reason
       lightOn = (dccMessage.data[addressLength] & 0x10) == 0x10;
-      f1 = (dccMessage.data[addressLength] & 0x01) == 0x01;
+      f1 = (dccMessage.data[addressLength] & 0x01) == 0x01;ar
       f2 = (dccMessage.data[addressLength] & 0x02) == 0x02;
       f3 = (dccMessage.data[addressLength] & 0x04) == 0x04;
     } else {
