@@ -4,6 +4,7 @@
 #include <avr/eeprom.h>
 
 #include "dccdecode.h"
+#include "signalhead.h"
 
 // Which pin on the Arduino is connected to the NeoPixels?
 #define PIN_LED        3
@@ -57,6 +58,8 @@ volatile DecoderMode decoderMode = DECODER_MODE_OPERATION;
 // 1024 is from prescaler
 #define WAIT_TIME_ACK 47
 
+volatile uint8_t animationTimestep = 0;
+
 // Timer1 has fired.
 ISR(TIMER1_COMPA_vect) {
   TCNT1 = 0;
@@ -65,11 +68,17 @@ ISR(TIMER1_COMPA_vect) {
     pixels.clear();
     pixels.show();
     decoderMode = DECODER_MODE_PROGRAMMING;
+  } else if (decoderMode == DECODER_MODE_OPERATION) {
+    // Runs as animation timer
+    animationTimestep += 1;
   }
 }
 
 uint8_t addressEeprom EEMEM = 3;
 uint8_t address = 0;
+
+
+SignalHead signalHeads[2];
 
 void setup() {
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
@@ -82,6 +91,9 @@ void setup() {
 
   // DCC Input
   setupDccInt0PB2();
+
+  // Prepare timer 1 for animation purposes
+  SignalHead::setupTimer1();
   
   pixels.clear();
   pixels.show();
@@ -252,97 +264,141 @@ bool f1 = false;
 bool f2 = false;
 bool f3 = false;
 
-void loop() {
-  if (lastReadMessageNumber != currentMessageNumber) {
+bool parseNewMessage() {
+  if (lastReadMessageNumber == currentMessageNumber) {
+    return false;
+  }
+
     // Process message
-    lastReadMessageNumber = currentMessageNumber;
-    uint8_t checksum = 0;
-    for (uint8_t i = 0; i < dccMessage.length; i++) {
-      checksum ^= dccMessage.data[i];
-    }
-    if (checksum != 0 || dccMessage.length < 2) {
-      return;
-    }
+  lastReadMessageNumber = currentMessageNumber;
+  uint8_t checksum = 0;
+  for (uint8_t i = 0; i < dccMessage.length; i++) {
+    checksum ^= dccMessage.data[i];
+  }
+  if (checksum != 0 || dccMessage.length < 2) {
+    return true;
+  }
 
-    if (decoderMode == DECODER_MODE_SENDING_ACK) {
-      // There's an ACK currently going out so ignore all messages (which are just other "Programming" messages anyway)
-      return;
-    }
+  if (decoderMode == DECODER_MODE_SENDING_ACK) {
+    // There's an ACK currently going out so ignore all messages (which are just other "Programming" messages anyway)
+    return true;
+  }
 
-    if (dccMessage.length == 3 && dccMessage.data[0] == 0 && dccMessage.data[1] == 0) {
-      // General reset command
-      if (decoderMode == DECODER_MODE_OPERATION) {
-        //DEBUG should be clear instead
-        pixels.clear();
-        pixels.show();
-        lastProgrammingMessage.length = 0;
-        decoderMode = DECODER_MODE_RESET_RECEIVED;
-      }
-      return;
+  if (dccMessage.length == 3 && dccMessage.data[0] == 0 && dccMessage.data[1] == 0) {
+    // General reset command
+    if (decoderMode == DECODER_MODE_OPERATION) {
+      TCCR1 = 0; // Stop timer
+      pixels.clear();
+      pixels.show();
+      lastProgrammingMessage.length = 0;
+      decoderMode = DECODER_MODE_RESET_RECEIVED;
     }
+    return true;
+  }
 
-    if (decoderMode != DECODER_MODE_OPERATION && (dccMessage.data[0] & 0xF0) == 0x70) {
-      decoderMode = DECODER_MODE_PROGRAMMING;
-      processProgrammingMessage();
-      return;
-    }
+  if (decoderMode != DECODER_MODE_OPERATION && (dccMessage.data[0] & 0xF0) == 0x70) {
+    decoderMode = DECODER_MODE_PROGRAMMING;
+    processProgrammingMessage();
+    return true;
+  }
 
-    decoderMode = DECODER_MODE_OPERATION;
-    uint16_t messageAddress = 0;
-    int8_t addressLength = 0;
-    if ((dccMessage.data[0] & 0x80) == 0) {
-      // Short address
-      addressLength = 1;
-      messageAddress = dccMessage.data[0];
-    } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0xC0) {
-      // Long address
-      addressLength = 2;
-      messageAddress = dccMessage.data[1] | (uint16_t(dccMessage.data[0] & 0x3F) << 8);
-    } else {
-      return;
-    }
-
-    if (messageAddress != address) {
-      return; // Not our locomotive
-    }
-
-    if (dccMessage.length == addressLength + 2 && (dccMessage.data[addressLength] & 0xC0) == 0x40) {
-      // Basic speed and direction: 01RG-GGGG
-      // But! The first G is the last G
-      // (they later used the free bit after R to give one bit more precision for G, and the bit was freed because they rethought how functions work).
-      currentSpeed = ((dccMessage.data[addressLength] & 0xF) << 1) | ((dccMessage.data[addressLength] & 0x10) >> 4);
-      currentSpeed = currentSpeed << 2; // Super, super simple mapping to 127 steps, yes it won't reach 127, I don't care this is debug only
-      currentDirection = (dccMessage.data[addressLength] & 0x20) == 0x20;
-    } else if (dccMessage.length == addressLength + 3 && dccMessage.data[addressLength] == 0x3F) {
-      // 127 step speed packet 0011-1111 RGGG-GGGG
-      currentSpeed = dccMessage.data[addressLength + 1] & 0x7F;
-      currentDirection = (dccMessage.data[addressLength + 1] & 0x80) == 0x80;
-    } else if (dccMessage.length >= addressLength + 4 && dccMessage.data[addressLength] == 0x3C) {
-      // Speed, direction and up to 32 functions 0011-1100 RGGG-GGGG
-      currentSpeed = dccMessage.data[addressLength + 1] & 0x7F;
-      currentDirection = (dccMessage.data[addressLength + 1] & 0x80) == 0x80;
-      lightOn = (dccMessage.data[addressLength + 2] & 0x01) == 0x01;
-      f1 = (dccMessage.data[addressLength + 2] & 0x02) == 0x02;
-      f2 = (dccMessage.data[addressLength + 2] & 0x04) == 0x04;
-      f3 = (dccMessage.data[addressLength + 2] & 0x08) == 0x08;
-    } else if (dccMessage.length == addressLength + 2 && (dccMessage.data[addressLength] & 0xE0) == 0x80) {
-      // Functions F0-F4 100D-DDDD, with bit0 = F1, bit3 = F4, bit4 = F0 for some reason
-      lightOn = (dccMessage.data[addressLength] & 0x10) == 0x10;
-      f1 = (dccMessage.data[addressLength] & 0x01) == 0x01;ar
-      f2 = (dccMessage.data[addressLength] & 0x02) == 0x02;
-      f3 = (dccMessage.data[addressLength] & 0x04) == 0x04;
-    } else {
-      return;
-    }
-    
-    if (currentDirection) {
-      pixels.setPixelColor(0, pixels.Color(0, currentSpeed, lightOn ? 20 : 0));
-    } else {
-      pixels.setPixelColor(0, pixels.Color(currentSpeed, 0, lightOn ? 20 : 0));
-    }
-    pixels.setPixelColor(1, f1 ? 20 : 0, f2 ? 20 : 0, f3 ? 20 : 0);
-    pixels.show();
+  decoderMode = DECODER_MODE_OPERATION;
+  uint16_t messageAddress = 0;
+  int8_t addressLength = 0;
+  if ((dccMessage.data[0] & 0x80) == 0) {
+    // Short address
+    addressLength = 1;
+    messageAddress = dccMessage.data[0];
+  } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0xC0) {
+    // Long address
+    addressLength = 2;
+    messageAddress = dccMessage.data[1] | (uint16_t(dccMessage.data[0] & 0x3F) << 8);
   } else {
+    return true;
+  }
+
+  if (messageAddress != address) {
+    return true; // Not our locomotive
+  }
+
+  if (dccMessage.length == addressLength + 2 && (dccMessage.data[addressLength] & 0xC0) == 0x40) {
+    // Basic speed and direction: 01RG-GGGG
+    // But! The first G is the last G
+    // (they later used the free bit after R to give one bit more precision for G, and the bit was freed because they rethought how functions work).
+    currentSpeed = ((dccMessage.data[addressLength] & 0xF) << 1) | ((dccMessage.data[addressLength] & 0x10) >> 4);
+    currentSpeed = currentSpeed << 2; // Super, super simple mapping to 127 steps, yes it won't reach 127, I don't care this is debug only
+    currentDirection = (dccMessage.data[addressLength] & 0x20) == 0x20;
+  } else if (dccMessage.length == addressLength + 3 && dccMessage.data[addressLength] == 0x3F) {
+    // 127 step speed packet 0011-1111 RGGG-GGGG
+    currentSpeed = dccMessage.data[addressLength + 1] & 0x7F;
+    currentDirection = (dccMessage.data[addressLength + 1] & 0x80) == 0x80;
+  } else if (dccMessage.length >= addressLength + 4 && dccMessage.data[addressLength] == 0x3C) {
+    // Speed, direction and up to 32 functions 0011-1100 RGGG-GGGG
+    currentSpeed = dccMessage.data[addressLength + 1] & 0x7F;
+    currentDirection = (dccMessage.data[addressLength + 1] & 0x80) == 0x80;
+    lightOn = (dccMessage.data[addressLength + 2] & 0x01) == 0x01;
+    f1 = (dccMessage.data[addressLength + 2] & 0x02) == 0x02;
+    f2 = (dccMessage.data[addressLength + 2] & 0x04) == 0x04;
+    f3 = (dccMessage.data[addressLength + 2] & 0x08) == 0x08;
+  } else if (dccMessage.length == addressLength + 2 && (dccMessage.data[addressLength] & 0xE0) == 0x80) {
+    // Functions F0-F4 100D-DDDD, with bit0 = F1, bit3 = F4, bit4 = F0 for some reason
+    lightOn = (dccMessage.data[addressLength] & 0x10) == 0x10;
+    f1 = (dccMessage.data[addressLength] & 0x01) == 0x01;
+    f2 = (dccMessage.data[addressLength] & 0x02) == 0x02;
+    f3 = (dccMessage.data[addressLength] & 0x04) == 0x04;
+  } else {
+    return true;
+  }
+  
+  if (currentSpeed < 50) {
+    signalHeads[0].setColor(SignalHead::RED);
+  } else if (currentSpeed < 100) {
+    signalHeads[0].setColor(SignalHead::YELLOW);
+  } else {
+    signalHeads[0].setColor(SignalHead::GREEN);
+  }
+  signalHeads[0].setFlashing(lightOn);
+
+  if (!f1 && !f2) {
+    signalHeads[1].setColor(SignalHead::RED);
+  } else if (f1 && !f2) {
+    signalHeads[1].setColor(SignalHead::GREEN);
+  } else if (!f1 && f2) {
+    signalHeads[1].setColor(SignalHead::YELLOW);
+  } else if (f1 && f2) {
+    signalHeads[1].setColor(SignalHead::LUNAR);
+  }
+  signalHeads[1].setFlashing(f3);
+
+  return true;
+}
+
+uint8_t lastAnimationTimestep = 1;
+bool updateAnimation() {
+  if (animationTimestep == lastAnimationTimestep) {
+    return false;
+  }
+
+  lastAnimationTimestep = animationTimestep;
+
+  for (int i = 0; i < 2; i++) {
+    pixels.setPixelColor(i, signalHeads[i].updateColor());
+  }
+  pixels.show();
+
+  return true;
+}
+
+void loop() {
+  bool didSomething = false;
+  if (parseNewMessage()) {
+    didSomething = true;
+  }
+  if (decoderMode == DECODER_MODE_OPERATION && updateAnimation()) {
+    didSomething = true;
+  }
+
+  if (!didSomething) {
     MCUCR |= (1 << SE); // Sleep enable, sleep mode 000 = Idle
     sleep_cpu();
   }
