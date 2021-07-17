@@ -1,6 +1,5 @@
 #include "signalhead.h"
 
-#include <Adafruit_NeoPixel.h>
 #include <avr/interrupt.h>
 
 const uint8_t TIMESTEPS_FULLY_ON = 2;
@@ -11,11 +10,11 @@ const uint8_t TIMESTEPS_TURNING_ON = 20;
 const uint8_t COLOR_SWITCHING_TIME = 20;
 const uint8_t COLOR_SWITCHING_INTERMEDIATE_RED_TIME = 1;
 
-const uint8_t COLOR_RED[3] = { 255, 0, 0 };
-const uint8_t COLOR_GREEN[3] = { 0, 255, 0 };
-const uint8_t COLOR_YELLOW[3] = { 255, 255, 0 };
-const uint8_t COLOR_LUNAR[3] = { 20, 20, 255 };
-const uint8_t COLOR_BLACK[3] = { 0, 0, 0 };
+const ColorRGB COLOR_RED(255, 0, 0 );
+const ColorRGB COLOR_GREEN(0, 255, 0 );
+const ColorRGB COLOR_YELLOW(255, 255, 0);
+const ColorRGB COLOR_LUNAR(20, 20, 255);
+const ColorRGB COLOR_BLACK(0, 0, 0);
 
 const uint8_t ANIMATION_START_FLASHING = 0;
 const uint8_t ANIMATION_START_SWITCH_DIRECT = 5;
@@ -69,20 +68,18 @@ void SignalHead::setColor(Color color) {
     }
 }
 
-const uint8_t *SignalHead::colorPointer(SignalHead::Color a) {
+const ColorRGB *SignalHead::colorPointer(SignalHead::Color a) {
     switch(a) {
-        case RED: return COLOR_RED;
-        case GREEN: return COLOR_GREEN;
-        case YELLOW: return COLOR_YELLOW;
-        case LUNAR: return COLOR_LUNAR;
-        default: return COLOR_BLACK;
+        case RED: return &COLOR_RED;
+        case GREEN: return &COLOR_GREEN;
+        case YELLOW: return &COLOR_YELLOW;
+        case LUNAR: return &COLOR_LUNAR;
+        default: return &COLOR_BLACK;
     }
 }
 
-uint32_t SignalHead::updateColor() {
-    
-    uint8_t colors[3];
-    colorSwitching.updateColor(colorPointer(switchingFrom), colorPointer(switchingTo), colors);
+void SignalHead::updateColor(uint8_t *colors) {
+    colorSwitching.updateColor((const uint8_t *) colorPointer(switchingFrom), (const uint8_t *) colorPointer(switchingTo), colors);
 
     if (colorSwitching.isComplete() && nextAfter != UNDEFINED) {
         switchingFrom = switchingTo;
@@ -97,8 +94,6 @@ uint32_t SignalHead::updateColor() {
     }
 
     if (isFlashing || !flashing.isComplete()) {
-        flashing.updateColor(colors, COLOR_BLACK, colors);
+        flashing.updateColor(colors, (const uint8_t *) &COLOR_BLACK, colors);
     }
-
-    return Adafruit_NeoPixel::Color(colors[0], colors[1], colors[2]);
 }

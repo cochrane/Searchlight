@@ -1,7 +1,5 @@
 #include "animation.h"
 
-#include <Arduino.h>
-
 const uint8_t COLOR_RED[3] = { 255, 0, 0 };
 const uint8_t COLOR_BLACK[3] = { 0, 0, 0 };
 

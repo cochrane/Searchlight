@@ -3,6 +3,21 @@
 #include <stdint.h>
 #include <animation.h>
 
+struct ColorRGB {
+#ifdef COLOR_GRB
+    uint8_t g;
+    uint8_t r;
+    uint8_t b;
+#else
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+#endif
+
+    ColorRGB() = default;
+    constexpr ColorRGB(uint8_t red, uint8_t green, uint8_t blue): r(red), g(green), b(blue) {} 
+};
+
 class SignalHead {
 public:
     enum Color: int8_t {
@@ -17,7 +32,7 @@ public:
     void setColor(Color color);
     void setFlashing(bool flashing);
 
-    uint32_t updateColor();
+    void updateColor(uint8_t *color);
 
     SignalHead();
 
@@ -29,7 +44,7 @@ private:
     Color nextAfter = UNDEFINED;
     bool isFlashing = false;
 
-    const uint8_t *colorPointer(Color a);
+    const ColorRGB *colorPointer(Color a);
 
     AnimationPlayer colorSwitching;
     AnimationPlayer flashing;

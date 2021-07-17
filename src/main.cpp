@@ -1,23 +1,22 @@
-#include <Adafruit_NeoPixel.h>
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
 #include <avr/eeprom.h>
+#include <string.h> // For memset
 
 #include "dccdecode.h"
 #include "signalhead.h"
 
+// Skip the reset; we pinky promise not to send updates too often.
+#define ws2812_resettime 0
+#include <light_ws2812.h>
+#include <light_ws2812.c>
+
 // Which pin on the Arduino is connected to the NeoPixels?
-#define PIN_LED        3
+#define PIN_LED        _BV(PB3)
 
 // How many NeoPixels are attached to the Arduino?
 #define NUMPIXELS 2
 #define NUM_VERIFY_PIXELS 2
-
-// When setting up the NeoPixel library, we tell it how many pixels,
-// and which pin to use to send signals. Note that for older NeoPixel
-// strips you might need to change the third parameter -- see the
-// strandtest example for more information on possible values.
-Adafruit_NeoPixel pixels(NUMPIXELS, PIN_LED, NEO_GRB + NEO_KHZ800);
 
 /*
    PB2: DCC Input
@@ -33,19 +32,6 @@ const uint8_t ARDUINO_PIN_DCC_IN = 2;
 // Message stored by the decoder in programming mode; length = 0 if not used.
 DccMessage lastProgrammingMessage;
 
-/*
- * Weird work-around.
- * The Adafruit Neopixel library uses micros() to check that enough time has elapsed before switching. However,
- * the normal Arduino/Wiring "micros()" command uses timer1 or timer0 but we're using both for other purposes.
- * Since the rest of the code ensures that the switching on doesn't happen that often anyway, we're delivering
- * dummy values that trick the library into just submitting things.
- * Long-term we need to modify or replace the library
- */
-unsigned long micros() {
-  static uint8_t counter = 0;
-  return 400 * (counter++);
-}
-
 enum DecoderMode {
   DECODER_MODE_OPERATION = 0,
   DECODER_MODE_RESET_RECEIVED,
@@ -60,13 +46,16 @@ volatile DecoderMode decoderMode = DECODER_MODE_OPERATION;
 
 volatile uint8_t animationTimestep = 0;
 
+SignalHead signalHeads[NUMPIXELS];
+uint8_t signalHeadColors[3*NUMPIXELS] = { 0 };
+
 // Timer1 has fired.
 ISR(TIMER1_COMPA_vect) {
   TCNT1 = 0;
   if (decoderMode == DECODER_MODE_SENDING_ACK) {
     TCCR1 = 0; // Stop timer
-    pixels.clear();
-    pixels.show();
+    memset(signalHeadColors, 0, sizeof(signalHeadColors));
+    ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
     decoderMode = DECODER_MODE_PROGRAMMING;
   } else if (decoderMode == DECODER_MODE_OPERATION) {
     // Runs as animation timer
@@ -78,11 +67,8 @@ uint8_t addressEeprom EEMEM = 3;
 uint8_t address = 0;
 
 
-SignalHead signalHeads[2];
 
 void setup() {
-  pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
-
   // Load address from EEPROM
   address = eeprom_read_byte(&addressEeprom);
 
@@ -95,8 +81,7 @@ void setup() {
   // Prepare timer 1 for animation purposes
   SignalHead::setupTimer1();
   
-  pixels.clear();
-  pixels.show();
+  ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
   sei();
 }
 
@@ -128,10 +113,8 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
 
 void sendProgrammingAck() {
   // Increase power consumption (and hope this is enough…)
-  for (int i = 0; i < NUM_VERIFY_PIXELS; i++) {
-    pixels.setPixelColor(i, pixels.Color(255, 255, 255));
-  }
-  pixels.show();
+  memset(signalHeadColors, 255, sizeof(signalHeadColors));
+  ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
 
   decoderMode = DECODER_MODE_SENDING_ACK;
   
@@ -141,7 +124,7 @@ void sendProgrammingAck() {
   TCCR1 = (1 << CTC1) | (1 << CS13) | (1 << CS11) | (1 << CS10); // Normal mode, clear on OCR1A match, run immediately with CLK/1024
   TIMSK |= (1 << OCIE1A); // Interrupts on
 
-  interrupts();
+  sei();
 }
 
 uint16_t pagedModePage = 1;
@@ -288,8 +271,8 @@ bool parseNewMessage() {
     // General reset command
     if (decoderMode == DECODER_MODE_OPERATION) {
       TCCR1 = 0; // Stop timer
-      pixels.clear();
-      pixels.show();
+      memset(signalHeadColors, 0, sizeof(signalHeadColors));
+      ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
       lastProgrammingMessage.length = 0;
       decoderMode = DECODER_MODE_RESET_RECEIVED;
     }
@@ -381,10 +364,10 @@ bool updateAnimation() {
 
   lastAnimationTimestep = animationTimestep;
 
-  for (int i = 0; i < 2; i++) {
-    pixels.setPixelColor(i, signalHeads[i].updateColor());
+  for (int i = 0; i < NUMPIXELS; i++) {
+    signalHeads[i].updateColor(&signalHeadColors[i*3]);
   }
-  pixels.show();
+  ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
 
   return true;
 }
