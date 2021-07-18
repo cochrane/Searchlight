@@ -11,12 +11,11 @@
 #include <light_ws2812.h>
 #include <light_ws2812.c>
 
-// Which pin on the Arduino is connected to the NeoPixels?
+// Which pin on the controller is connected to the NeoPixels?
 #define PIN_LED        _BV(PB3)
 
-// How many NeoPixels are attached to the Arduino?
+// How many NeoPixels are attached to the controller?
 #define NUMPIXELS 2
-#define NUM_VERIFY_PIXELS 2
 
 /*
    PB2: DCC Input
@@ -24,10 +23,6 @@
    Timer 0: Handles DCC
    Timer 1: Handles animation, ack pulse
 */
-
-// INT0 pin is DCC
-// That is to say pin 4, Arduino 2, PCINT18, PD2
-const uint8_t ARDUINO_PIN_DCC_IN = 2;
 
 // Message stored by the decoder in programming mode; length = 0 if not used.
 DccMessage lastProgrammingMessage;
