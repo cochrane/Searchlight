@@ -122,7 +122,11 @@ void sendProgrammingAck() {
   sei();
 }
 
-uint16_t pagedModePage = 1;
+// Page for paged mode addressing. We support this mainly because implementing it was fun.
+// Note: Our internal page is 0-based even though the protocol transmits 1 based, because
+// that makes the maths easier. Note also that the protocol requires that "0" in the message
+// maps to page 256 (1 based), which happens automatically here.
+uint8_t pagedModePage = 0;
 
 // Aufgerufen wenn wir im Programmiermodus sind und die Nachricht eine Programmiernachricht ist
 void processProgrammingMessage() {
@@ -145,21 +149,19 @@ void processProgrammingMessage() {
     if (programmingRegister == 6) {
       if (dccMessage.data[1] == 1) {
         // Set page mode page. Supporting full page mode costs very little when we already support register mode.
-        pagedModePage = dccMessage.data[2];
-        if (pagedModePage == 0) {
-          pagedModePage = 256;
-        }
+        // This will map 0 to 255 - that is by design and required by the spec.
+        pagedModePage = dccMessage.data[2] - 1;
         sendProgrammingAck();
       } else {
         // Read page mode page
-        if (dccMessage.data[2] == pagedModePage || (dccMessage.data[2] == 0 && pagedModePage == 256)) {
+        if ((dccMessage.data[2] - 1) == pagedModePage) {
           sendProgrammingAck();
         }
       }
     } else {
       uint16_t cv = programmingRegister;
       if (programmingRegister < 5) {
-        cv = (pagedModePage - 1) * 4 + programmingRegister;
+        cv = pagedModePage * 4 + programmingRegister;
       } else if (programmingRegister == 5) {
         cv = 29;
       }
