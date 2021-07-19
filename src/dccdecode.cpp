@@ -24,7 +24,7 @@ void setupDccTimer0() {
   TIMSK = (1 << OCIE0A) | (1 << OCIE1A); // Interrupts on
 }
 
-enum DccReceiveState {
+enum DccReceiveState: uint8_t {
    // We are waiting for >= 10 bits that are all 1.
    // Any 0 bit before that resets the count
    // After ten 1s, a 0 is the first separator and indicates that the actual message bytes are following
