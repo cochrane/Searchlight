@@ -28,15 +28,31 @@ enum DccReceiveState: uint8_t {
    // We are waiting for >= 10 bits that are all 1.
    // Any 0 bit before that resets the count
    // After ten 1s, a 0 is the first separator and indicates that the actual message bytes are following
-  DCC_RECEIVE_STATE_PREAMBLE = 0,
+  DCC_RECEIVE_STATE_PREAMBLE0 = 0,
+  DCC_RECEIVE_STATE_PREAMBLE1,
+  DCC_RECEIVE_STATE_PREAMBLE2,
+  DCC_RECEIVE_STATE_PREAMBLE3,
+  DCC_RECEIVE_STATE_PREAMBLE4,
+  DCC_RECEIVE_STATE_PREAMBLE5,
+  DCC_RECEIVE_STATE_PREAMBLE6,
+  DCC_RECEIVE_STATE_PREAMBLE7,
+  DCC_RECEIVE_STATE_PREAMBLE8,
+  DCC_RECEIVE_STATE_PREAMBLE9,
+  DCC_RECEIVE_STATE_PREAMBLE10,
   // Waiting for bits for the current byte to come in, always exactly 8.
-  DCC_RECEIVE_STATE_BYTE_READING,
+  DCC_RECEIVE_STATE_BYTE_READING_BIT0,
+  DCC_RECEIVE_STATE_BYTE_READING_BIT1,
+  DCC_RECEIVE_STATE_BYTE_READING_BIT2,
+  DCC_RECEIVE_STATE_BYTE_READING_BIT3,
+  DCC_RECEIVE_STATE_BYTE_READING_BIT4,
+  DCC_RECEIVE_STATE_BYTE_READING_BIT5,
+  DCC_RECEIVE_STATE_BYTE_READING_BIT6,
+  DCC_RECEIVE_STATE_BYTE_READING_BIT7,
   // Done with a byte, waiting for the separator bit.
   // If it is 0, another byte follows; if it is 1, the message is over.
   DCC_RECEIVE_STATE_AWAIT_SEPARATOR
 };
 DccReceiveState receiveState;
-uint8_t currentBit;
 
 volatile DccMessage dccMessage;
 volatile uint8_t currentMessageNumber = 0;
@@ -55,40 +71,55 @@ ISR(TIMER0_COMPA_vect) {
   // Read bit value: If it's still low, then it was a long 0 wave; if it has changed to 1, it was a short 1 wave
   bool bitValue = (PINB & (1 << PINB2)) != 0;
   switch (receiveState) {
-    case DCC_RECEIVE_STATE_PREAMBLE:
+    case DCC_RECEIVE_STATE_PREAMBLE0:
+    case DCC_RECEIVE_STATE_PREAMBLE1:
+    case DCC_RECEIVE_STATE_PREAMBLE2:
+    case DCC_RECEIVE_STATE_PREAMBLE3:
+    case DCC_RECEIVE_STATE_PREAMBLE4:
+    case DCC_RECEIVE_STATE_PREAMBLE5:
+    case DCC_RECEIVE_STATE_PREAMBLE6:
+    case DCC_RECEIVE_STATE_PREAMBLE7:
+    case DCC_RECEIVE_STATE_PREAMBLE8:
+    case DCC_RECEIVE_STATE_PREAMBLE9:
       if (bitValue) {
-        currentBit++;
+        receiveState = DccReceiveState(receiveState + 1);
       } else {
-        if (currentBit >= 10) {
-          receiveState = DCC_RECEIVE_STATE_BYTE_READING;
-          dccMessage.length = 0;
-          dccMessage.data[0] = 0;
-        }
-        currentBit = 0;
+        receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
+      }
+    case DCC_RECEIVE_STATE_PREAMBLE10:
+      if (bitValue) {
+        receiveState = DCC_RECEIVE_STATE_BYTE_READING_BIT0;
+        dccMessage.length = 0;
+        dccMessage.data[0] = 0;
+      } else {
+        receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
       }
       break;
-    case DCC_RECEIVE_STATE_BYTE_READING:
+    case DCC_RECEIVE_STATE_BYTE_READING_BIT0:
+    case DCC_RECEIVE_STATE_BYTE_READING_BIT1:
+    case DCC_RECEIVE_STATE_BYTE_READING_BIT2:
+    case DCC_RECEIVE_STATE_BYTE_READING_BIT3:
+    case DCC_RECEIVE_STATE_BYTE_READING_BIT4:
+    case DCC_RECEIVE_STATE_BYTE_READING_BIT5:
+    case DCC_RECEIVE_STATE_BYTE_READING_BIT6:
+    case DCC_RECEIVE_STATE_BYTE_READING_BIT7:
       dccMessage.data[dccMessage.length] = (dccMessage.data[dccMessage.length] << 1) | bitValue;
-      currentBit += 1;
-      if (currentBit == 8) {
-        receiveState = DCC_RECEIVE_STATE_AWAIT_SEPARATOR;
-      }
+      receiveState = DccReceiveState(receiveState + 1);
       break;
     case DCC_RECEIVE_STATE_AWAIT_SEPARATOR:
       dccMessage.length += 1;
-      currentBit = 0;
       if (bitValue) {
         // End of packet
-        receiveState = DCC_RECEIVE_STATE_PREAMBLE;
+        receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
         currentMessageNumber += 1;
       } else {
         // Another byte follows
         if (dccMessage.length >= sizeof(dccMessage.data)) {
           // We can't store (nor process) the byte; ignore this message and wait for next preamble
-          receiveState = DCC_RECEIVE_STATE_PREAMBLE;
+          receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
         } else {
           dccMessage.data[dccMessage.length] = 0;
-          receiveState = DCC_RECEIVE_STATE_BYTE_READING;
+          receiveState = DCC_RECEIVE_STATE_BYTE_READING_BIT0;
         }
       }
       break;
