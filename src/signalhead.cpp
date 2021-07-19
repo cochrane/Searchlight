@@ -79,7 +79,7 @@ const ColorRGB *SignalHead::colorPointer(SignalHead::Color a) {
 }
 
 void SignalHead::updateColor(uint8_t *colors) {
-    colorSwitching.updateColor((const uint8_t *) colorPointer(switchingFrom), (const uint8_t *) colorPointer(switchingTo), colors);
+    colorSwitching.updateColor((const uint8_t *) colorPointer(switchingFrom), (const uint8_t *) colorPointer(switchingTo), (const uint8_t *) &COLOR_RED, colors);
 
     if (colorSwitching.isComplete() && nextAfter != UNDEFINED) {
         switchingFrom = switchingTo;
@@ -94,6 +94,6 @@ void SignalHead::updateColor(uint8_t *colors) {
     }
 
     if (isFlashing || !flashing.isComplete()) {
-        flashing.updateColor(colors, (const uint8_t *) &COLOR_BLACK, colors);
+        flashing.updateColor(colors, (const uint8_t *) &COLOR_BLACK, (const uint8_t *) &COLOR_BLACK, colors);
     }
 }
