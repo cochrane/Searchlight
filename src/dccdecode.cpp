@@ -86,13 +86,13 @@ ISR(TIMER0_COMPA_vect) {
       } else {
         receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
       }
+      break;
     case DCC_RECEIVE_STATE_PREAMBLE10:
-      if (bitValue) {
+      // Wait for first 0 bit indicating start of message
+      if (!bitValue) {
         receiveState = DCC_RECEIVE_STATE_BYTE_READING_BIT0;
         dccMessage.length = 0;
         dccMessage.data[0] = 0;
-      } else {
-        receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
       }
       break;
     case DCC_RECEIVE_STATE_BYTE_READING_BIT0:
