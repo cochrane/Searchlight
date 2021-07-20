@@ -61,11 +61,21 @@ ISR(TIMER1_COMPA_vect) {
 uint8_t addressEeprom EEMEM = 3;
 uint8_t address = 0;
 
+// CV31 and 32 for access to extended data
+// Not really used at the moment
+uint8_t extendedRangeHighEeprom EEMEM;
+uint8_t extendedRangeLowEeprom EEMEM;
 
+// Brightness
+const uint8_t CV_INDEX_BRIGHTNESS = 47;
+uint8_t brightnessEeprom EEMEM;
+const uint8_t BRIGHTNESS_MAX = 100;
+uint8_t brightness = BRIGHTNESS_MAX;
 
 void setup() {
   // Load address from EEPROM
   address = eeprom_read_byte(&addressEeprom);
+  brightness = eeprom_read_byte(&brightnessEeprom);
 
   // Timer 0: Measures DCC signal
   setupDccTimer0();
@@ -81,13 +91,17 @@ void setup() {
 }
 
 bool hasCv(uint16_t cvIndex) {
-  return cvIndex == 1 || cvIndex == 8;
+  return cvIndex == 1 || cvIndex == 7 || cvIndex == 8 || cvIndex == 31 || cvIndex == 32 || cvIndex == CV_INDEX_BRIGHTNESS;
 }
 
 uint8_t getCvValue(uint16_t cvIndex) {
   switch (cvIndex) {
     case 1: return address;
+    case 7: return 1; // Decoder version number
     case 8: return 0x0D; // Manufacturer ID for home-made and public domain decoders
+    case 31: return eeprom_read_byte(&extendedRangeHighEeprom);
+    case 32: return eeprom_read_byte(&extendedRangeLowEeprom);
+    case CV_INDEX_BRIGHTNESS: return brightness;
     default: return 0;
   }
 }
@@ -101,7 +115,17 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
     // Total reset of everything
     // There is special logic in the standard for when the reset takes longer, but we don't need that here.
     writeCvValue(1, 3); // Reset address to 3
+    writeCvValue(31, 0); // Extended area pointer (high)
+    writeCvValue(32, 0); // Extended area pointer (low)
+    writeCvValue(CV_INDEX_BRIGHTNESS, BRIGHTNESS_MAX); // Maximum brightness
     return true;
+  } else if (cvIndex == 31) {
+    eeprom_update_byte(&extendedRangeHighEeprom, newValue);
+  } else if (cvIndex == 32) {
+    eeprom_update_byte(&extendedRangeLowEeprom, newValue);
+  } else if (cvIndex == CV_INDEX_BRIGHTNESS) {
+    brightness = newValue;
+    eeprom_update_byte(&brightnessEeprom, newValue);
   }
   return false;
 }
@@ -285,14 +309,33 @@ bool parseNewMessage() {
   decoderMode = DECODER_MODE_OPERATION;
   uint16_t messageAddress = 0;
   int8_t addressLength = 0;
+  bool isLocomotive = false;
   if ((dccMessage.data[0] & 0x80) == 0) {
     // Short address
     addressLength = 1;
     messageAddress = dccMessage.data[0];
+    isLocomotive = true;
   } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0xC0) {
     // Long address
     addressLength = 2;
     messageAddress = dccMessage.data[1] | (uint16_t(dccMessage.data[0] & 0x3F) << 8);
+    isLocomotive = true;
+  } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0x80) {
+    // Accessory decoder
+    addressLength = 2;
+
+    // Address format is weird. See RCN213.
+    uint16_t address = (dccMessage.data[0] & 0x3F) | (0x7 & ~((dccMessage.data[1] & 0x70) >> 4));
+    uint8_t port = (dccMessage.data[1] & 0x6) >> 1;
+    uint16_t addressRcn213 = (address << 2 | port) - 3;
+    if ((dccMessage.data[1] & 0x80) == 0x80) {
+      bool direction = dccMessage.data[1] & 0x1;
+      bool turnOn = dccMessage.data[1] & 0x8;
+      // Basic accessory decoder: 10AA-AAAA 1AAA-DAAR
+      // For POM: 
+    } else if ((dccMessage.data[1] & 0x89) == 0x01) {
+      // Extended accessory decoder: 10AA-AAAA 0AAA-0AA1 DDDD-DDDD
+    }
   } else {
     return true;
   }
@@ -363,6 +406,11 @@ bool updateAnimation() {
 
   for (int i = 0; i < NUMPIXELS; i++) {
     signalHeads[i].updateColor(&signalHeadColors[i*3]);
+  }
+  if (brightness < BRIGHTNESS_MAX) {
+    for (int i = 0; i < sizeof(signalHeadColors); i++) {
+      signalHeadColors[i] = (uint16_t(signalHeadColors[i]) * brightness) / BRIGHTNESS_MAX;
+    }
   }
   ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
 
