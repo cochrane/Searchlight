@@ -35,7 +35,7 @@ bool AnimationPlayer::isComplete() {
 }
 
 uint8_t blend(uint8_t start, uint8_t end, uint8_t alpha, uint8_t alphaScale) {
-    return uint8_t(int16_t(alpha) * int16_t(end - start)) / int16_t(alphaScale) + start;
+    return uint8_t(int16_t(alpha) * int16_t(end - start) / int16_t(alphaScale)) + start;
 }
 
 void AnimationPlayer::updateColor(const uint8_t *a, const uint8_t *b, const uint8_t *c, uint8_t *out) {
