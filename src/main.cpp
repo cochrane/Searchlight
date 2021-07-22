@@ -90,11 +90,8 @@ void setup() {
   sei();
 }
 
-bool hasCv(uint16_t cvIndex) {
-  return cvIndex == 1 || cvIndex == 7 || cvIndex == 8 || cvIndex == 31 || cvIndex == 32 || cvIndex == CV_INDEX_BRIGHTNESS;
-}
-
-uint8_t getCvValue(uint16_t cvIndex) {
+// Values <= 255 are actual values, anything else means "CV not supported"
+uint16_t getCvValue(uint16_t cvIndex) {
   switch (cvIndex) {
     case 1: return address;
     case 7: return 1; // Decoder version number
@@ -102,7 +99,7 @@ uint8_t getCvValue(uint16_t cvIndex) {
     case 31: return eeprom_read_byte(&extendedRangeHighEeprom);
     case 32: return eeprom_read_byte(&extendedRangeLowEeprom);
     case CV_INDEX_BRIGHTNESS: return brightness;
-    default: return 0;
+    default: return 0x100;
   }
 }
 
@@ -196,7 +193,7 @@ void processProgrammingMessage() {
         }
       } else {
         // Verify byte
-        if (hasCv(cv) && getCvValue(cv) == dccMessage.data[1]) {
+        if (getCvValue(cv) == dccMessage.data[1]) {
           sendProgrammingAck();
         }
       }
@@ -214,7 +211,7 @@ void processProgrammingMessage() {
     case 0x4:
       // Verify byte
       // Recommendation in RCN214: Never confirm for CVs we don't have
-      if (hasCv(cv) && getCvValue(cv) == dccMessage.data[2]) {
+      if (getCvValue(cv) == dccMessage.data[2]) {
         sendProgrammingAck();
       }
       break;
@@ -231,25 +228,22 @@ void processProgrammingMessage() {
         uint8_t bitValue = (dccMessage.data[2] & 0x8) >> 3;
         if ((dccMessage.data[2] & 0x10) == 0) {
           // Verify bit
-          if (hasCv(cv)) {
-            uint8_t value = getCvValue(cv);
-            if (((value >> bitIndex) & 0x1) == bitValue) {
-              sendProgrammingAck();
-            }
-          } else {
-            // Recommendation in RCN214: Confirm any bit value for CVs we don't have
+          // Recommendation in RCN214: Confirm any bit value for CVs we don't have
+          uint16_t value = getCvValue(cv);
+          if (value > 0xFF || ((value >> bitIndex) & 0x1) == bitValue) {
             sendProgrammingAck();
           }
         } else {
           // Write bit
-          if (hasCv(cv)) {
-            uint8_t newValue = getCvValue(cv);
+          uint16_t newValue = getCvValue(cv);
+          if (newValue <= 0xFF) {
+            uint8_t newValueByte = uint8_t(newValue & 0xFF);
             if (bitValue) {
-              newValue |= 1 << bitIndex;
+              newValueByte |= 1 << bitIndex;
             } else {
-              newValue = newValue & ~(1 << bitIndex);
+              newValueByte = newValue & ~(1 << bitIndex);
             }
-            if (writeCvValue(cv, newValue)) {
+            if (writeCvValue(cv, newValueByte)) {
               sendProgrammingAck();
             }
           }
@@ -308,7 +302,7 @@ bool parseNewMessage() {
 
   decoderMode = DECODER_MODE_OPERATION;
   uint16_t messageAddress = 0;
-  const uint8_t *commandStart;
+  volatile const uint8_t *commandStart;
   uint8_t commandLength;
   bool isLocomotive = false;
   if ((dccMessage.data[0] & 0x80) == 0) {
