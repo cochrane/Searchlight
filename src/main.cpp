@@ -308,21 +308,25 @@ bool parseNewMessage() {
 
   decoderMode = DECODER_MODE_OPERATION;
   uint16_t messageAddress = 0;
-  int8_t addressLength = 0;
+  const uint8_t *commandStart;
+  uint8_t commandLength;
   bool isLocomotive = false;
   if ((dccMessage.data[0] & 0x80) == 0) {
     // Short address
-    addressLength = 1;
+    commandStart = dccMessage.data + 1;
+    commandLength = dccMessage.length - 1;
     messageAddress = dccMessage.data[0];
     isLocomotive = true;
   } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0xC0) {
     // Long address
-    addressLength = 2;
+    commandStart = dccMessage.data + 2;
+    commandLength = dccMessage.length - 2;
     messageAddress = dccMessage.data[1] | (uint16_t(dccMessage.data[0] & 0x3F) << 8);
     isLocomotive = true;
   } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0x80) {
     // Accessory decoder
-    addressLength = 2;
+    commandStart = dccMessage.data + 2;
+    commandLength = dccMessage.length - 2;
 
     // Address format is weird. See RCN213.
     uint16_t address = (dccMessage.data[0] & 0x3F) | (0x7 & ~((dccMessage.data[1] & 0x70) >> 4));
@@ -344,31 +348,32 @@ bool parseNewMessage() {
     return true; // Not our locomotive
   }
 
-  if (dccMessage.length == addressLength + 2 && (dccMessage.data[addressLength] & 0xC0) == 0x40) {
+  if (commandLength == 2 && (commandStart[0] & 0xC0) == 0x40) {
     // Basic speed and direction: 01RG-GGGG
     // But! The first G is the last G
     // (they later used the free bit after R to give one bit more precision for G, and the bit was freed because they rethought how functions work).
-    currentSpeed = ((dccMessage.data[addressLength] & 0xF) << 1) | ((dccMessage.data[addressLength] & 0x10) >> 4);
+    currentSpeed = ((commandStart[0] & 0xF) << 1) | ((commandStart[0] & 0x10) >> 4);
     currentSpeed = currentSpeed << 2; // Super, super simple mapping to 127 steps, yes it won't reach 127, I don't care this is debug only
-    currentDirection = (dccMessage.data[addressLength] & 0x20) == 0x20;
-  } else if (dccMessage.length == addressLength + 3 && dccMessage.data[addressLength] == 0x3F) {
+    currentDirection = (commandStart[0] & 0x20) == 0x20;
+  } else if (commandLength == 3 && commandStart[0] == 0x3F) {
     // 127 step speed packet 0011-1111 RGGG-GGGG
-    currentSpeed = dccMessage.data[addressLength + 1] & 0x7F;
-    currentDirection = (dccMessage.data[addressLength + 1] & 0x80) == 0x80;
-  } else if (dccMessage.length >= addressLength + 4 && dccMessage.data[addressLength] == 0x3C) {
+    currentSpeed = commandStart[1] & 0x7F;
+    currentDirection = (commandStart[1] & 0x80) == 0x80;
+  } else if (commandLength >= 4 && commandStart[0] == 0x3C) {
     // Speed, direction and up to 32 functions 0011-1100 RGGG-GGGG
-    currentSpeed = dccMessage.data[addressLength + 1] & 0x7F;
-    currentDirection = (dccMessage.data[addressLength + 1] & 0x80) == 0x80;
-    lightOn = (dccMessage.data[addressLength + 2] & 0x01) == 0x01;
-    f1 = (dccMessage.data[addressLength + 2] & 0x02) == 0x02;
-    f2 = (dccMessage.data[addressLength + 2] & 0x04) == 0x04;
-    f3 = (dccMessage.data[addressLength + 2] & 0x08) == 0x08;
-  } else if (dccMessage.length == addressLength + 2 && (dccMessage.data[addressLength] & 0xE0) == 0x80) {
+    currentSpeed = commandStart[1] & 0x7F;
+    currentDirection = (commandStart[1] & 0x80) == 0x80;
+    lightOn = (commandStart[2] & 0x01) == 0x01;
+    f1 = (commandStart[2] & 0x02) == 0x02;
+    f2 = (commandStart[2] & 0x04) == 0x04;
+    f3 = (commandStart[2] & 0x08) == 0x08;
+  } else if (commandLength == 2 && (commandStart[0] & 0xE0) == 0x80) {
     // Functions F0-F4 100D-DDDD, with bit0 = F1, bit3 = F4, bit4 = F0 for some reason
-    lightOn = (dccMessage.data[addressLength] & 0x10) == 0x10;
-    f1 = (dccMessage.data[addressLength] & 0x01) == 0x01;
-    f2 = (dccMessage.data[addressLength] & 0x02) == 0x02;
-    f3 = (dccMessage.data[addressLength] & 0x04) == 0x04;
+    uint8_t command = commandStart[0];
+    lightOn = (command & 0x10);
+    f1 = (command & 0x01) == 0x01;
+    f2 = (command & 0x02) == 0x02;
+    f3 = (command & 0x04) == 0x04;
   } else {
     return true;
   }
