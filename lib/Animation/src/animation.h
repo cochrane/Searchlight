@@ -6,7 +6,7 @@ struct AnimationPhase {
 };
 
 // Must be defined elsewhere
-extern AnimationPhase animations[];
+const extern AnimationPhase animations[];
 
 class AnimationPlayer {
     uint8_t phaseTimestep;
@@ -16,7 +16,7 @@ class AnimationPlayer {
 
     const AnimationPhase *getCurrentPhase();
 public:
-    AnimationPlayer();
+    AnimationPlayer(uint8_t initialAnimation);
 
     void setAnimation(uint8_t index);
     bool isComplete();

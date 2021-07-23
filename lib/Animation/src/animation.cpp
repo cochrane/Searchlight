@@ -2,9 +2,9 @@
 
 const uint8_t COLOR_BLACK[3] = { 0, 0, 0 };
 
-AnimationPlayer::AnimationPlayer() {
+AnimationPlayer::AnimationPlayer(uint8_t initialAnimation) {
     phaseTimestep = 0;
-    phaseIndex = 0;
+    phaseIndex = initialAnimation;
 }
 
 void AnimationPlayer::setAnimation(uint8_t index) {

@@ -104,27 +104,35 @@ uint16_t getCvValue(uint16_t cvIndex) {
 }
 
 bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
-  if (cvIndex == 1) {
-    address = newValue;
-    eeprom_update_byte(&addressEeprom, address);
-    return true;
-  } else if (cvIndex == 8 && newValue == 8) {
-    // Total reset of everything
-    // There is special logic in the standard for when the reset takes longer, but we don't need that here.
-    writeCvValue(1, 3); // Reset address to 3
-    writeCvValue(31, 0); // Extended area pointer (high)
-    writeCvValue(32, 0); // Extended area pointer (low)
-    writeCvValue(CV_INDEX_BRIGHTNESS, BRIGHTNESS_MAX); // Maximum brightness
-    return true;
-  } else if (cvIndex == 31) {
-    eeprom_update_byte(&extendedRangeHighEeprom, newValue);
-  } else if (cvIndex == 32) {
-    eeprom_update_byte(&extendedRangeLowEeprom, newValue);
-  } else if (cvIndex == CV_INDEX_BRIGHTNESS) {
-    brightness = newValue;
-    eeprom_update_byte(&brightnessEeprom, newValue);
+  switch (cvIndex) {
+    case 1:
+      address = newValue;
+      eeprom_update_byte(&addressEeprom, address);
+      return true;
+    case 8:
+      if (newValue == 8) {
+        // Total reset of everything
+        // There is special logic in the standard for when the reset takes longer, but we don't need that here.
+        writeCvValue(1, 3); // Reset address to 3
+        writeCvValue(31, 0); // Extended area pointer (high)
+        writeCvValue(32, 0); // Extended area pointer (low)
+        writeCvValue(CV_INDEX_BRIGHTNESS, BRIGHTNESS_MAX); // Maximum brightness
+        return true;
+      }
+      return false;
+    case 31:
+      eeprom_update_byte(&extendedRangeHighEeprom, newValue);
+      return true;
+    case 32:
+      eeprom_update_byte(&extendedRangeLowEeprom, newValue);
+      return true;
+    case CV_INDEX_BRIGHTNESS:
+      brightness = newValue;
+      eeprom_update_byte(&brightnessEeprom, newValue);
+      return true;
+    default:
+      return false;
   }
-  return false;
 }
 
 void sendProgrammingAck() {
@@ -186,7 +194,7 @@ void processProgrammingMessage() {
       } else if (programmingRegister == 5) {
         cv = 29;
       }
-      if ((dccMessage.data[0] & 0x8) != 0) {
+      if (dccMessage.data[0] & 0x8) {
         // Write byte
         if (writeCvValue(cv, dccMessage.data[1])) {
           sendProgrammingAck();

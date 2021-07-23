@@ -18,9 +18,10 @@ const ColorRGB COLOR_BLACK(0, 0, 0);
 
 const uint8_t ANIMATION_START_FLASHING = 0;
 const uint8_t ANIMATION_START_SWITCH_DIRECT = 5;
+const uint8_t ANIMATION_SWITCH_DONE = 7;
 const uint8_t ANIMATION_START_SWITCH_INTERMEDIATE_RED = 8;
 
-AnimationPhase animations[] = {
+const AnimationPhase animations[] = {
     // Flashing: A is signal color
     { TIMESTEPS_FULLY_ON, 0x80 | 0x00 },
     { TIMESTEPS_TURNING_OFF, 0x03 },
@@ -56,10 +57,10 @@ SignalHead::SignalHead()
 : switchingFrom(RED),
 switchingTo(RED),
 nextAfter(UNDEFINED),
-isFlashing(false)
- {
-    colorSwitching.setAnimation(7);
-    flashing.setAnimation(ANIMATION_START_FLASHING);
+isFlashing(false),
+colorSwitching(ANIMATION_SWITCH_DONE),
+flashing(ANIMATION_START_FLASHING)
+{
 }
 
 void SignalHead::setColor(Color color) {
