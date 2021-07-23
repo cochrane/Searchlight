@@ -13,8 +13,8 @@ const uint8_t COLOR_SWITCHING_INTERMEDIATE_RED_TIME = 1;
 const ColorRGB colorValues[] = {
     ColorRGB(255, 0, 0), // RED - 2
     ColorRGB(0, 255, 0), // GREEN - 3
-    ColorRGB(255, 255, 0), // YELLOW - 4
-    ColorRGB(20, 20, 255), // LUNAR - 5
+    ColorRGB(127, 127, 0), // YELLOW - 4
+    ColorRGB(96, 96, 96), // LUNAR - 5
     ColorRGB(0, 0, 0), // UNDEFINED/BLACK - 6
 };
 
@@ -36,7 +36,7 @@ const AnimationPhase animations[] = {
     { COLOR_SWITCHING_TIME/2, 0x61 },
     { 127, 0x80 | 0x11 },
 
-    // Color change with intermediate red. A is start, B is end, C is red
+    // Color change with intermediate red. A is start, B is end
     { COLOR_SWITCHING_TIME/4, 0x06 },
     { COLOR_SWITCHING_TIME/4, 0x62 },
     { COLOR_SWITCHING_INTERMEDIATE_RED_TIME, 0x22 },

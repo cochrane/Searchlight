@@ -18,7 +18,7 @@ const uint8_t *AnimationPlayer::select(const uint8_t *a, const uint8_t *b, uint8
 }
 
 const AnimationPhase *AnimationPlayer::getCurrentPhase() {
-    AnimationPhase *currentPhase = &animations[phaseIndex];
+    const AnimationPhase *currentPhase = &animations[phaseIndex];
     while (currentPhase->length < 0) {
         phaseIndex += currentPhase->length;
         currentPhase = &animations[phaseIndex];
