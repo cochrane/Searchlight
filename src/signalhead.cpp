@@ -1,7 +1,6 @@
 #include "signalhead.h"
 
 #include <avr/interrupt.h>
-#include <avr/eeprom.h>
 #include <string.h>
 
 const uint8_t TIMESTEPS_FULLY_ON = 2;
@@ -11,17 +10,6 @@ const uint8_t TIMESTEPS_TURNING_ON = 20;
 
 const uint8_t COLOR_SWITCHING_TIME = 20;
 const uint8_t COLOR_SWITCHING_INTERMEDIATE_RED_TIME = 1;
-
-const ColorRGB defaultColorValues[] = {
-    ColorRGB(255, 0, 0), // RED - 2 - cv 48,49,50
-    ColorRGB(0, 255, 0), // GREEN - 3 - cv 51,52,53
-    ColorRGB(127, 127, 0), // YELLOW - 4 - cv 54,55,56
-    ColorRGB(96, 96, 96), // LUNAR - 5 - cv 57,58,59
-    ColorRGB(0, 0, 0), // UNDEFINED/BLACK - 6
-};
-
-ColorRGB colorValues[ sizeof(defaultColorValues)/sizeof(ColorRGB) ];
-ColorRGB colorValuesStored[ sizeof(defaultColorValues)/sizeof(ColorRGB) ] EEMEM;
 
 const uint8_t ANIMATION_START_FLASHING = 0;
 const uint8_t ANIMATION_START_SWITCH_DIRECT = 5;
@@ -60,51 +48,31 @@ void SignalHead::setupTimer1() {
     TIMSK |= (1 << OCIE1A); // Interrupts on
 }
 
-void SignalHead::loadColorsFromEeprom() {
-    eeprom_read_block(colorValues, colorValuesStored, sizeof(defaultColorValues));
-}
-
-void SignalHead::restoreDefaultColorsToEeprom() {
-    eeprom_update_block(defaultColorValues, colorValuesStored, sizeof(defaultColorValues));
-    memcpy(colorValues, defaultColorValues, sizeof(defaultColorValues));
-}
-
-uint8_t SignalHead::getColorValue(uint8_t index) {
-    uint8_t adjusted = ColorRGB::adjustArrayIndex(index);
-    return ((uint8_t *) colorValues)[adjusted];
-}
-
-void SignalHead::writeColorValueToEeprom(uint8_t index, uint8_t value) {
-    uint8_t adjusted = ColorRGB::adjustArrayIndex(index);
-    eeprom_update_byte(&(((uint8_t *) colorValuesStored)[adjusted]), value);
-    ((uint8_t *) colorValues)[adjusted] = value;
-}
-
 SignalHead::SignalHead()
-: switchingFrom(RED),
-switchingTo(RED),
-nextAfter(UNDEFINED),
+: switchingFrom(Colors::RED),
+switchingTo(Colors::RED),
+nextAfter(Colors::UNDEFINED),
 isFlashing(false),
 colorSwitching(ANIMATION_SWITCH_DONE),
 flashing(ANIMATION_START_FLASHING)
 {
 }
 
-void SignalHead::setColor(Color color) {
+void SignalHead::setColor(Colors::ColorName color) {
     if (switchingTo != color) {
         nextAfter = color;
     }
 }
 
 void SignalHead::updateColor(uint8_t *colors) {
-    colorSwitching.updateColor((const uint8_t *) &colorValues[switchingFrom], (const uint8_t *) &colorValues[switchingTo], colors);
+    colorSwitching.updateColor((const uint8_t *) &Colors::colorValues[switchingFrom], (const uint8_t *) &Colors::colorValues[switchingTo], colors);
 
-    if (colorSwitching.isComplete() && nextAfter != UNDEFINED) {
+    if (colorSwitching.isComplete() && nextAfter != Colors::UNDEFINED) {
         switchingFrom = switchingTo;
         switchingTo = nextAfter;
-        nextAfter = UNDEFINED;
+        nextAfter = Colors::UNDEFINED;
 
-        if (switchingFrom == RED || switchingTo == RED) {
+        if (switchingFrom == Colors::RED || switchingTo == Colors::RED) {
             colorSwitching.setAnimation(ANIMATION_START_SWITCH_DIRECT);
         } else {
             colorSwitching.setAnimation(ANIMATION_START_SWITCH_INTERMEDIATE_RED);
@@ -112,6 +80,6 @@ void SignalHead::updateColor(uint8_t *colors) {
     }
 
     if (isFlashing || !flashing.isComplete()) {
-        flashing.updateColor(colors, (const uint8_t *) &colorValues[UNDEFINED], colors);
+        flashing.updateColor(colors, (const uint8_t *) &Colors::colorValues[Colors::UNDEFINED], colors);
     }
 }

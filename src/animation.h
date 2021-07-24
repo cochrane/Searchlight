@@ -1,33 +1,5 @@
 #include <stdint.h>
-
-struct ColorRGB {
-#ifdef COLOR_GRB
-    uint8_t g;
-    uint8_t r;
-    uint8_t b;
-#else
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-#endif
-
-    ColorRGB() = default;
-    constexpr ColorRGB(uint8_t red, uint8_t green, uint8_t blue): r(red), g(green), b(blue) {} 
-
-    static uint8_t adjustArrayIndex(uint8_t index) {
-#ifdef COLOR_GRB
-        uint8_t field = index % 3; // 0 becomes 1, 1 becomes 0, 2 stays 2
-        if (field == 2) return index;
-        return (index/3)*3 + (field ^ 0x1);
-#else
-        return index;
-#endif
-    }
-};
-
-// Ensure the sizes fit so we can work properly with the eeprom
-static_assert(sizeof(ColorRGB) == 3);
-static_assert(sizeof(ColorRGB[2]) == 6);
+#include <colors.h>
 
 struct AnimationPhase {
     /*
@@ -47,7 +19,7 @@ struct AnimationPhase {
 
 // Must be defined elsewhere
 const extern AnimationPhase animations[];
-extern ColorRGB colorValues[];
+extern Colors::ColorRGB Colors::colorValues[];
 
 class AnimationPlayer {
     uint8_t phaseTimestep;

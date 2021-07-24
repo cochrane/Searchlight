@@ -2,19 +2,11 @@
 
 #include <stdint.h>
 #include <animation.h>
+#include <colors.h>
 
 class SignalHead {
 public:
-    enum Color: int8_t {
-        RED = 0,
-        GREEN,
-        YELLOW,
-        LUNAR,
-
-        UNDEFINED
-    };
-
-    void setColor(Color color);
+    void setColor(Colors::ColorName color);
     void setFlashing(bool flashing);
 
     void updateColor(uint8_t *color);
@@ -22,15 +14,11 @@ public:
     SignalHead();
 
     static void setupTimer1();
-    static void loadColorsFromEeprom();
-    static void restoreDefaultColorsToEeprom();
-    static uint8_t getColorValue(uint8_t index);
-    static void writeColorValueToEeprom(uint8_t index, uint8_t color);
 
 private:
-    Color switchingFrom = RED;
-    Color switchingTo = RED;
-    Color nextAfter = UNDEFINED;
+    Colors::ColorName switchingFrom = Colors::RED;
+    Colors::ColorName switchingTo = Colors::RED;
+    Colors::ColorName nextAfter = Colors::UNDEFINED;
     bool isFlashing = false;
 
     AnimationPlayer colorSwitching;

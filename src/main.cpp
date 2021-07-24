@@ -74,13 +74,13 @@ uint8_t brightness = BRIGHTNESS_MAX;
 
 // Color values
 const uint8_t CV_INDEX_COLOR_BASE = 48;
-const uint8_t CV_INDEX_COLOR_LENGTH = 3 * SignalHead::UNDEFINED;
+const uint8_t CV_INDEX_COLOR_LENGTH = 3 * Colors::UNDEFINED;
 
 void setup() {
   // Load address from EEPROM
   address = eeprom_read_byte(&addressEeprom);
   brightness = eeprom_read_byte(&brightnessEeprom);
-  SignalHead::loadColorsFromEeprom();
+  Colors::loadColorsFromEeprom();
 
   // Timer 0: Measures DCC signal
   setupDccTimer0();
@@ -98,7 +98,7 @@ void setup() {
 // Values <= 255 are actual values, anything else means "CV not supported"
 uint16_t getCvValue(uint16_t cvIndex) {
   if (cvIndex >= CV_INDEX_COLOR_BASE && cvIndex < CV_INDEX_COLOR_BASE + CV_INDEX_COLOR_LENGTH) {
-    return SignalHead::getColorValue(cvIndex - CV_INDEX_COLOR_BASE);
+    return Colors::getColorValue(cvIndex - CV_INDEX_COLOR_BASE);
   }
 
   switch (cvIndex) {
@@ -114,7 +114,7 @@ uint16_t getCvValue(uint16_t cvIndex) {
 
 bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
   if (cvIndex >= CV_INDEX_COLOR_BASE && cvIndex < CV_INDEX_COLOR_BASE + CV_INDEX_COLOR_LENGTH) {
-    SignalHead::writeColorValueToEeprom(cvIndex - CV_INDEX_COLOR_BASE, newValue);
+    Colors::writeColorValueToEeprom(cvIndex - CV_INDEX_COLOR_BASE, newValue);
     return true;
   }
 
@@ -131,7 +131,7 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
         writeCvValue(31, 0); // Extended area pointer (high)
         writeCvValue(32, 0); // Extended area pointer (low)
         writeCvValue(CV_INDEX_BRIGHTNESS, BRIGHTNESS_MAX); // Maximum brightness
-        SignalHead::restoreDefaultColorsToEeprom();
+        Colors::restoreDefaultColorsToEeprom();
         return true;
       }
       return false;
@@ -405,22 +405,22 @@ bool parseNewMessage() {
   }
   
   if (currentSpeed < 50) {
-    signalHeads[0].setColor(SignalHead::RED);
+    signalHeads[0].setColor(Colors::RED);
   } else if (currentSpeed < 100) {
-    signalHeads[0].setColor(SignalHead::YELLOW);
+    signalHeads[0].setColor(Colors::YELLOW);
   } else {
-    signalHeads[0].setColor(SignalHead::GREEN);
+    signalHeads[0].setColor(Colors::GREEN);
   }
   signalHeads[0].setFlashing(lightOn);
 
   if (!f1 && !f2) {
-    signalHeads[1].setColor(SignalHead::RED);
+    signalHeads[1].setColor(Colors::RED);
   } else if (f1 && !f2) {
-    signalHeads[1].setColor(SignalHead::GREEN);
+    signalHeads[1].setColor(Colors::GREEN);
   } else if (!f1 && f2) {
-    signalHeads[1].setColor(SignalHead::YELLOW);
+    signalHeads[1].setColor(Colors::YELLOW);
   } else if (f1 && f2) {
-    signalHeads[1].setColor(SignalHead::LUNAR);
+    signalHeads[1].setColor(Colors::LUNAR);
   }
   signalHeads[1].setFlashing(f3);
 
