@@ -22,6 +22,10 @@ public:
     SignalHead();
 
     static void setupTimer1();
+    static void loadColorsFromEeprom();
+    static void restoreDefaultColorsToEeprom();
+    static uint8_t getColorValue(uint8_t index);
+    static void writeColorValueToEeprom(uint8_t index, uint8_t color);
 
 private:
     Color switchingFrom = RED;

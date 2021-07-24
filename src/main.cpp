@@ -72,10 +72,15 @@ uint8_t brightnessEeprom EEMEM;
 const uint8_t BRIGHTNESS_MAX = 100;
 uint8_t brightness = BRIGHTNESS_MAX;
 
+// Color values
+const uint8_t CV_INDEX_COLOR_BASE = 48;
+const uint8_t CV_INDEX_COLOR_LENGTH = 3 * SignalHead::UNDEFINED;
+
 void setup() {
   // Load address from EEPROM
   address = eeprom_read_byte(&addressEeprom);
   brightness = eeprom_read_byte(&brightnessEeprom);
+  SignalHead::loadColorsFromEeprom();
 
   // Timer 0: Measures DCC signal
   setupDccTimer0();
@@ -92,6 +97,10 @@ void setup() {
 
 // Values <= 255 are actual values, anything else means "CV not supported"
 uint16_t getCvValue(uint16_t cvIndex) {
+  if (cvIndex >= CV_INDEX_COLOR_BASE && cvIndex < CV_INDEX_COLOR_BASE + CV_INDEX_COLOR_LENGTH) {
+    return SignalHead::getColorValue(cvIndex - CV_INDEX_COLOR_BASE);
+  }
+
   switch (cvIndex) {
     case 1: return address;
     case 7: return 1; // Decoder version number
@@ -104,6 +113,11 @@ uint16_t getCvValue(uint16_t cvIndex) {
 }
 
 bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
+  if (cvIndex >= CV_INDEX_COLOR_BASE && cvIndex < CV_INDEX_COLOR_BASE + CV_INDEX_COLOR_LENGTH) {
+    SignalHead::writeColorValueToEeprom(cvIndex - CV_INDEX_COLOR_BASE, newValue);
+    return true;
+  }
+
   switch (cvIndex) {
     case 1:
       address = newValue;
@@ -117,6 +131,7 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
         writeCvValue(31, 0); // Extended area pointer (high)
         writeCvValue(32, 0); // Extended area pointer (low)
         writeCvValue(CV_INDEX_BRIGHTNESS, BRIGHTNESS_MAX); // Maximum brightness
+        SignalHead::restoreDefaultColorsToEeprom();
         return true;
       }
       return false;
@@ -136,6 +151,9 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
 }
 
 void sendProgrammingAck() {
+  if (decoderMode == DECODER_MODE_OPERATION) {
+    return;
+  }
   // Increase power consumption (and hope this is enough…)
   memset(signalHeadColors, 255, sizeof(signalHeadColors));
   ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
@@ -158,32 +176,32 @@ void sendProgrammingAck() {
 uint8_t pagedModePage = 0;
 
 // Aufgerufen wenn wir im Programmiermodus sind und die Nachricht eine Programmiernachricht ist
-void processProgrammingMessage() {
+void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t messageLength) {
   // Compare and copy
-  bool matchesLastMessage = dccMessage.length == lastProgrammingMessage.length;
-  lastProgrammingMessage.length = dccMessage.length;
-  for (int i = 0; i < dccMessage.length; i++) {
-    matchesLastMessage = matchesLastMessage && dccMessage.data[i] == lastProgrammingMessage.data[i];
-    lastProgrammingMessage.data[i] = dccMessage.data[i];
+  bool matchesLastMessage = messageLength == lastProgrammingMessage.length;
+  lastProgrammingMessage.length = messageLength;
+  for (int i = 0; i < messageLength; i++) {
+    matchesLastMessage = matchesLastMessage && relevantMessage[i] == lastProgrammingMessage.data[i];
+    lastProgrammingMessage.data[i] = relevantMessage[i];
   }
 
   if (!matchesLastMessage) {
     return;
   }
 
-  if (dccMessage.length == 3) {
+  if (lastProgrammingMessage.length == 3 && decoderMode == DECODER_MODE_PROGRAMMING) {
     // Old register mode access
-    uint8_t programmingRegister = (dccMessage.data[0] & 0x7) + 1;
+    uint8_t programmingRegister = (relevantMessage[0] & 0x7) + 1;
     
     if (programmingRegister == 6) {
-      if (dccMessage.data[1] == 1) {
+      if (lastProgrammingMessage.data[1] == 1) {
         // Set page mode page. Supporting full page mode costs very little when we already support register mode.
         // This will map 0 to 255 - that is by design and required by the spec.
-        pagedModePage = dccMessage.data[2] - 1;
+        pagedModePage = lastProgrammingMessage.data[2] - 1;
         sendProgrammingAck();
       } else {
         // Read page mode page
-        if ((dccMessage.data[2] - 1) == pagedModePage) {
+        if ((lastProgrammingMessage.data[2] - 1) == pagedModePage) {
           sendProgrammingAck();
         }
       }
@@ -194,14 +212,14 @@ void processProgrammingMessage() {
       } else if (programmingRegister == 5) {
         cv = 29;
       }
-      if (dccMessage.data[0] & 0x8) {
+      if (lastProgrammingMessage.data[0] & 0x8) {
         // Write byte
-        if (writeCvValue(cv, dccMessage.data[1])) {
+        if (writeCvValue(cv, lastProgrammingMessage.data[1])) {
           sendProgrammingAck();
         }
       } else {
         // Verify byte
-        if (getCvValue(cv) == dccMessage.data[1]) {
+        if (getCvValue(cv) == lastProgrammingMessage.data[1]) {
           sendProgrammingAck();
         }
       }
@@ -209,32 +227,32 @@ void processProgrammingMessage() {
     return;
   }
   
-  if (dccMessage.length != 4) {
+  if (lastProgrammingMessage.length != 4) {
     return;
   }
 
-  uint16_t cv = ((dccMessage.data[0] & 0x3) << 8 | dccMessage.data[1]) + 1;
+  uint16_t cv = ((lastProgrammingMessage.data[0] & 0x3) << 8 | lastProgrammingMessage.data[1]) + 1;
   
-  switch (dccMessage.data[0] & 0xC) {
+  switch (lastProgrammingMessage.data[0] & 0xC) {
     case 0x4:
       // Verify byte
       // Recommendation in RCN214: Never confirm for CVs we don't have
-      if (getCvValue(cv) == dccMessage.data[2]) {
+      if (getCvValue(cv) == lastProgrammingMessage.data[2]) {
         sendProgrammingAck();
       }
       break;
     case 0xC:
       // Write byte
-      if (writeCvValue(cv, dccMessage.data[2])) {
+      if (writeCvValue(cv, lastProgrammingMessage.data[2])) {
         sendProgrammingAck();
       }
       break;
     case 0x8:
-      if ((dccMessage.data[2] & 0xE0) == 0xE0) {
+      if ((lastProgrammingMessage.data[2] & 0xE0) == 0xE0) {
         // Bit manipulation
-        uint8_t bitIndex = dccMessage.data[2] & 0x7;
-        uint8_t bitValue = (dccMessage.data[2] & 0x8) >> 3;
-        if ((dccMessage.data[2] & 0x10) == 0) {
+        uint8_t bitIndex = lastProgrammingMessage.data[2] & 0x7;
+        uint8_t bitValue = (lastProgrammingMessage.data[2] & 0x8) >> 3;
+        if ((lastProgrammingMessage.data[2] & 0x10) == 0) {
           // Verify bit
           // Recommendation in RCN214: Confirm any bit value for CVs we don't have
           uint16_t value = getCvValue(cv);
@@ -304,7 +322,7 @@ bool parseNewMessage() {
 
   if (decoderMode != DECODER_MODE_OPERATION && (dccMessage.data[0] & 0xF0) == 0x70) {
     decoderMode = DECODER_MODE_PROGRAMMING;
-    processProgrammingMessage();
+    processProgrammingMessage(dccMessage.data, dccMessage.length);
     return true;
   }
 
@@ -348,6 +366,12 @@ bool parseNewMessage() {
 
   if (messageAddress != address) {
     return true; // Not our locomotive
+  }
+
+  if (commandLength == 4 && (commandStart[0] & 0xF0) == 0xE0) {
+    // POM commands
+    processProgrammingMessage(commandStart, commandLength);
+    return true;
   }
 
   if (commandLength == 2 && (commandStart[0] & 0xC0) == 0x40) {
