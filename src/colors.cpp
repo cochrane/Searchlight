@@ -17,14 +17,12 @@ namespace Colors {
     }
 
     uint8_t getColorValue(uint8_t index) {
-        uint8_t adjusted = ColorRGB::adjustArrayIndex(index);
-        return ((uint8_t *) colorValues)[adjusted];
+        return ((uint8_t *) colorValues)[index];
     }
 
     void writeColorValueToEeprom(uint8_t index, uint8_t value) {
-        uint8_t adjusted = ColorRGB::adjustArrayIndex(index);
-        eeprom_update_byte(&(((uint8_t *) colorValuesStored)[adjusted]), value);
-        ((uint8_t *) colorValues)[adjusted] = value;
+        eeprom_update_byte(&(((uint8_t *) colorValuesStored)[index]), value);
+        ((uint8_t *) colorValues)[index] = value;
     }
 }
 

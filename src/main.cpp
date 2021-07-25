@@ -5,6 +5,7 @@
 
 #include "dccdecode.h"
 #include "signalhead.h"
+#include "configuration.h"
 
 // Skip the reset; we pinky promise not to send updates too often.
 #define ws2812_resettime 0
@@ -13,9 +14,6 @@
 
 // Which pin on the controller is connected to the NeoPixels?
 #define PIN_LED        _BV(PB3)
-
-// How many NeoPixels are attached to the controller?
-#define NUMPIXELS 2
 
 /*
    PB2: DCC Input
@@ -29,6 +27,7 @@ DccMessage lastProgrammingMessage;
 
 enum DecoderMode {
   DECODER_MODE_OPERATION = 0,
+  DECODER_MODE_EMERGENCY_STOP,
   DECODER_MODE_RESET_RECEIVED,
   DECODER_MODE_PROGRAMMING,
   DECODER_MODE_SENDING_ACK
@@ -41,8 +40,17 @@ volatile DecoderMode decoderMode = DECODER_MODE_OPERATION;
 
 volatile uint8_t animationTimestep = 0;
 
-SignalHead signalHeads[NUMPIXELS];
-uint8_t signalHeadColors[3*NUMPIXELS] = { 0 };
+// CV31 and 32 for access to extended data
+// Not really used at the moment
+uint8_t extendedRangeHighEeprom EEMEM;
+uint8_t extendedRangeLowEeprom EEMEM;
+
+// Color values
+const uint8_t CV_INDEX_COLOR_BASE = 48;
+const uint8_t CV_INDEX_COLOR_LENGTH = 3 * Colors::COUNT;
+
+SignalHead signalHeads[config::MAX_NUM_SIGNAL_HEADS];
+uint8_t signalHeadColors[3*config::MAX_NUM_SIGNAL_HEADS] = { 0 };
 
 // Timer1 has fired.
 ISR(TIMER1_COMPA_vect) {
@@ -50,7 +58,7 @@ ISR(TIMER1_COMPA_vect) {
   if (decoderMode == DECODER_MODE_SENDING_ACK) {
     TCCR1 = 0; // Stop timer
     memset(signalHeadColors, 0, sizeof(signalHeadColors));
-    ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
+    ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
     decoderMode = DECODER_MODE_PROGRAMMING;
   } else if (decoderMode == DECODER_MODE_OPERATION) {
     // Runs as animation timer
@@ -58,28 +66,9 @@ ISR(TIMER1_COMPA_vect) {
   }
 }
 
-uint8_t addressEeprom EEMEM = 3;
-uint8_t address = 0;
-
-// CV31 and 32 for access to extended data
-// Not really used at the moment
-uint8_t extendedRangeHighEeprom EEMEM;
-uint8_t extendedRangeLowEeprom EEMEM;
-
-// Brightness
-const uint8_t CV_INDEX_BRIGHTNESS = 47;
-uint8_t brightnessEeprom EEMEM;
-const uint8_t BRIGHTNESS_MAX = 100;
-uint8_t brightness = BRIGHTNESS_MAX;
-
-// Color values
-const uint8_t CV_INDEX_COLOR_BASE = 48;
-const uint8_t CV_INDEX_COLOR_LENGTH = 3 * Colors::UNDEFINED;
-
 void setup() {
   // Load address from EEPROM
-  address = eeprom_read_byte(&addressEeprom);
-  brightness = eeprom_read_byte(&brightnessEeprom);
+  config::loadConfiguration();
   Colors::loadColorsFromEeprom();
 
   // Timer 0: Measures DCC signal
@@ -91,7 +80,7 @@ void setup() {
   // Prepare timer 1 for animation purposes
   SignalHead::setupTimer1();
   
-  ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
+  ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
   sei();
 }
 
@@ -102,13 +91,11 @@ uint16_t getCvValue(uint16_t cvIndex) {
   }
 
   switch (cvIndex) {
-    case 1: return address;
     case 7: return 1; // Decoder version number
     case 8: return 0x0D; // Manufacturer ID for home-made and public domain decoders
     case 31: return eeprom_read_byte(&extendedRangeHighEeprom);
     case 32: return eeprom_read_byte(&extendedRangeLowEeprom);
-    case CV_INDEX_BRIGHTNESS: return brightness;
-    default: return 0x100;
+    default: return config::getValueForCv(cvIndex);
   }
 }
 
@@ -119,19 +106,14 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
   }
 
   switch (cvIndex) {
-    case 1:
-      address = newValue;
-      eeprom_update_byte(&addressEeprom, address);
-      return true;
     case 8:
       if (newValue == 8) {
         // Total reset of everything
         // There is special logic in the standard for when the reset takes longer, but we don't need that here.
-        writeCvValue(1, 3); // Reset address to 3
         writeCvValue(31, 0); // Extended area pointer (high)
         writeCvValue(32, 0); // Extended area pointer (low)
-        writeCvValue(CV_INDEX_BRIGHTNESS, BRIGHTNESS_MAX); // Maximum brightness
         Colors::restoreDefaultColorsToEeprom();
+        config::resetConfigurationToDefault();
         return true;
       }
       return false;
@@ -141,12 +123,8 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
     case 32:
       eeprom_update_byte(&extendedRangeLowEeprom, newValue);
       return true;
-    case CV_INDEX_BRIGHTNESS:
-      brightness = newValue;
-      eeprom_update_byte(&brightnessEeprom, newValue);
-      return true;
     default:
-      return false;
+      return config::setValueForCv(cvIndex, newValue);
   }
 }
 
@@ -155,8 +133,8 @@ void sendProgrammingAck() {
     return;
   }
   // Increase power consumption (and hope this is enough…)
-  memset(signalHeadColors, 255, sizeof(signalHeadColors));
-  ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
+  memset(signalHeadColors, 255, config::values.activeSignalHeads*3);
+  ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
 
   decoderMode = DECODER_MODE_SENDING_ACK;
   
@@ -313,7 +291,7 @@ bool parseNewMessage() {
     if (decoderMode == DECODER_MODE_OPERATION) {
       TCCR1 = 0; // Stop timer
       memset(signalHeadColors, 0, sizeof(signalHeadColors));
-      ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
+      ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
       lastProgrammingMessage.length = 0;
       decoderMode = DECODER_MODE_RESET_RECEIVED;
     }
@@ -326,9 +304,71 @@ bool parseNewMessage() {
     return true;
   }
 
-  decoderMode = DECODER_MODE_OPERATION;
-  uint16_t messageAddress = 0;
-  volatile const uint8_t *commandStart;
+  if (decoderMode != DECODER_MODE_EMERGENCY_STOP) {
+    decoderMode = DECODER_MODE_OPERATION;
+  }
+
+  if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0x80) {
+      // Accessory decoder
+      if ((dccMessage.data[1] & 0x80) == 0x80) {
+        // Basic accessory decoder: 10AA-AAAA 1AAA-DAAR
+
+        // Address format is weird. See RCN213.
+        uint16_t address = (dccMessage.data[0] & 0x3F) | (0x7 & ~((dccMessage.data[1] & 0x70) >> 4));
+        uint8_t port = (dccMessage.data[1] & 0x6) >> 1;
+        uint16_t addressRcn213 = (address << 2 | port) - 3;
+
+        bool direction = dccMessage.data[1] & 0x1;
+        bool turnOn = dccMessage.data[1] & 0x8;
+        if (addressRcn213 == 2047 && !direction && !turnOn) {
+          // Emergency turn off. Not sure it helps if the signal goes dark but why not.
+          memset(signalHeadColors, 0, sizeof(signalHeadColors));
+          ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
+          decoderMode = DECODER_MODE_EMERGENCY_STOP;
+        }
+
+        // Every signal head gets three addresses: red/green, lunar/yellow, flashing on/off
+        if (addressRcn213 < config::values.address ||
+          addressRcn213 >= config::values.address + config::values.activeSignalHeads * 3) {
+          return false;
+        }
+        decoderMode = DECODER_MODE_OPERATION;
+        
+        if (!turnOn) {
+          // Message with flag turnOff gets sent whenever the command station thinks we've sent power
+          // through the attached solenoid coils for long enough. For anything not controlling solenoids,
+          // this message is completely irrelevant.
+
+          // TODO If we were to add Railcom then this would be a place where we'd need to ack.
+          return false;
+        }
+
+        // For POM:
+        if (direction == false && turnOn == true && dccMessage.length > 3 && (dccMessage.data[2] & 0xF0) == 0xE0) {
+          // POM commands
+          processProgrammingMessage(&dccMessage.data[2], dccMessage.length - 2);
+          return true;
+        }
+
+        uint8_t relativeAddress = uint8_t(addressRcn213 - config::values.address);
+        uint8_t signalHead = relativeAddress/3;
+        uint8_t relativeField = relativeAddress - signalHead*3;
+        // Invert number so signal head 0 is the top one
+        uint8_t invertedSignalHead = config::values.activeSignalHeads - 1 - signalHead;
+        if (relativeField == 0) {
+          // dir=0: red, dir=1: green
+          signalHeads[invertedSignalHead].setColor(direction ? Colors::GREEN : Colors::RED);
+        } else if (relativeField == 1) {
+          // dir=0: lunar, dir=1: yellow
+          signalHeads[invertedSignalHead].setColor(direction ? Colors::YELLOW : Colors::LUNAR);
+        } else if (relativeField == 2) {
+          // dir=0: flashing off, dir=1: flashing on
+          signalHeads[invertedSignalHead].setFlashing(direction);
+        }
+      }
+  }
+
+  /*volatile const uint8_t *commandStart;
   uint8_t commandLength;
   bool isLocomotive = false;
   if ((dccMessage.data[0] & 0x80) == 0) {
@@ -422,7 +462,7 @@ bool parseNewMessage() {
   } else if (f1 && f2) {
     signalHeads[1].setColor(Colors::LUNAR);
   }
-  signalHeads[1].setFlashing(f3);
+  signalHeads[1].setFlashing(f3);*/
 
   return true;
 }
@@ -435,15 +475,23 @@ bool updateAnimation() {
 
   lastAnimationTimestep = animationTimestep;
 
-  for (int i = 0; i < NUMPIXELS; i++) {
+  for (int i = 0; i < config::values.activeSignalHeads; i++) {
     signalHeads[i].updateColor(&signalHeadColors[i*3]);
-  }
-  if (brightness < BRIGHTNESS_MAX) {
-    for (int i = 0; i < sizeof(signalHeadColors); i++) {
-      signalHeadColors[i] = (uint16_t(signalHeadColors[i]) * brightness) / BRIGHTNESS_MAX;
+
+    if (config::values.colorOrder == config::Configuration::COLOR_ORDER_GRB) {
+      // Swap colors for WS2812
+      uint8_t red = signalHeadColors[i*3 + 0];
+      uint8_t green = signalHeadColors[i*3 + 1];
+      signalHeadColors[i*3 + 0] = green;
+      signalHeadColors[i*3 + 1] = red;
     }
   }
-  ws2812_sendarray_mask(signalHeadColors, sizeof(signalHeadColors), PIN_LED);
+  if (config::values.brightness < config::BRIGHTNESS_MAX) {
+    for (int i = 0; i < config::values.activeSignalHeads*3; i++) {
+      signalHeadColors[i] = (uint16_t(signalHeadColors[i]) * config::values.brightness) / config::BRIGHTNESS_MAX;
+    }
+  }
+  ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
 
   return true;
 }
