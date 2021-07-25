@@ -48,12 +48,12 @@ bool setValueForCv(uint16_t cvIndex, uint8_t value) {
         case 18:
             values.address = (values.address & 0xFF00) | value;
             eeprom_update_word(&valuesEeprom.address, values.address);
-            break;
+            return true;
         case 9:
         case 17:
             values.address = (values.address & 0x00FF) | (value << 8);
             eeprom_update_word(&valuesEeprom.address, values.address);
-            break;
+            return true;
         case 29: return value == DEFAULT_CONFIGURATION; // pretend we can write it, but only to what it already was.
         case CV_INDEX_BRIGHTNESS:
             values.brightness = value;
