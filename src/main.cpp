@@ -22,9 +22,6 @@
    Timer 1: Handles animation, ack pulse
 */
 
-// Message stored by the decoder in programming mode; length = 0 if not used.
-DccMessage lastProgrammingMessage;
-
 enum DecoderMode {
   DECODER_MODE_OPERATION = 0,
   DECODER_MODE_EMERGENCY_STOP,
@@ -39,11 +36,6 @@ volatile DecoderMode decoderMode = DECODER_MODE_OPERATION;
 #define WAIT_TIME_ACK 47
 
 volatile uint8_t animationTimestep = 0;
-
-// CV31 and 32 for access to extended data
-// Not really used at the moment
-uint8_t extendedRangeHighEeprom EEMEM;
-uint8_t extendedRangeLowEeprom EEMEM;
 
 // Color values
 const uint8_t CV_INDEX_COLOR_BASE = 48;
@@ -93,8 +85,6 @@ uint16_t getCvValue(uint16_t cvIndex) {
   switch (cvIndex) {
     case 7: return 1; // Decoder version number
     case 8: return 0x0D; // Manufacturer ID for home-made and public domain decoders
-    case 31: return eeprom_read_byte(&extendedRangeHighEeprom);
-    case 32: return eeprom_read_byte(&extendedRangeLowEeprom);
     default: return config::getValueForCv(cvIndex);
   }
 }
@@ -110,19 +100,11 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
       if (newValue == 8) {
         // Total reset of everything
         // There is special logic in the standard for when the reset takes longer, but we don't need that here.
-        writeCvValue(31, 0); // Extended area pointer (high)
-        writeCvValue(32, 0); // Extended area pointer (low)
         Colors::restoreDefaultColorsToEeprom();
         config::resetConfigurationToDefault();
         return true;
       }
       return false;
-    case 31:
-      eeprom_update_byte(&extendedRangeHighEeprom, newValue);
-      return true;
-    case 32:
-      eeprom_update_byte(&extendedRangeLowEeprom, newValue);
-      return true;
     default:
       return config::setValueForCv(cvIndex, newValue);
   }
@@ -147,29 +129,17 @@ void sendProgrammingAck() {
   sei();
 }
 
+// Message stored by the decoder in programming mode; length = 0 if not used.
+DccMessage lastProgrammingMessage;
+
 // Page for paged mode addressing. We support this mainly because implementing it was fun.
 // Note: Our internal page is 0-based even though the protocol transmits 1 based, because
 // that makes the maths easier. Note also that the protocol requires that "0" in the message
 // maps to page 256 (1 based), which happens automatically here.
 uint8_t pagedModePage = 0;
 
-// Aufgerufen wenn wir im Programmiermodus sind und die Nachricht eine Programmiernachricht ist
-void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t messageLength) {
-  // Compare and copy
-  bool matchesLastMessage = messageLength == lastProgrammingMessage.length;
-  lastProgrammingMessage.length = messageLength;
-  for (int i = 0; i < messageLength; i++) {
-    matchesLastMessage = matchesLastMessage && relevantMessage[i] == lastProgrammingMessage.data[i];
-    lastProgrammingMessage.data[i] = relevantMessage[i];
-  }
-
-  if (!matchesLastMessage) {
-    return;
-  }
-
-  if (lastProgrammingMessage.length == 3 && decoderMode == DECODER_MODE_PROGRAMMING) {
-    // Old register mode access
-    uint8_t programmingRegister = (relevantMessage[0] & 0x7) + 1;
+void processRegisterModeMessage() {
+    uint8_t programmingRegister = (lastProgrammingMessage.data[0] & 0x7) + 1;
     
     if (programmingRegister == 6) {
       if (lastProgrammingMessage.data[1] == 1) {
@@ -202,6 +172,25 @@ void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t 
         }
       }
     }
+}
+
+// Aufgerufen wenn wir im Programmiermodus sind und die Nachricht eine Programmiernachricht ist
+void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t messageLength) {
+  // Compare and copy
+  bool matchesLastMessage = messageLength == lastProgrammingMessage.length;
+  lastProgrammingMessage.length = messageLength;
+  for (int i = 0; i < messageLength; i++) {
+    matchesLastMessage = matchesLastMessage && relevantMessage[i] == lastProgrammingMessage.data[i];
+    lastProgrammingMessage.data[i] = relevantMessage[i];
+  }
+
+  if (!matchesLastMessage) {
+    return;
+  }
+
+  if (lastProgrammingMessage.length == 3 && decoderMode == DECODER_MODE_PROGRAMMING) {
+    // Old register mode access
+    processRegisterModeMessage();
     return;
   }
   
@@ -229,23 +218,24 @@ void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t 
       if ((lastProgrammingMessage.data[2] & 0xE0) == 0xE0) {
         // Bit manipulation
         uint8_t bitIndex = lastProgrammingMessage.data[2] & 0x7;
+        uint8_t setBit = 1 << bitIndex;
         uint8_t bitValue = (lastProgrammingMessage.data[2] & 0x8) >> 3;
         if ((lastProgrammingMessage.data[2] & 0x10) == 0) {
           // Verify bit
           // Recommendation in RCN214: Confirm any bit value for CVs we don't have
           uint16_t value = getCvValue(cv);
-          if (value > 0xFF || ((value >> bitIndex) & 0x1) == bitValue) {
+          if (value > 0xFF || (value & setBit)) {
             sendProgrammingAck();
           }
         } else {
           // Write bit
           uint16_t newValue = getCvValue(cv);
-          if (newValue <= 0xFF) {
+          if (newValue <= 0xFF && (setBit & config::writeMaskForCv(cv))) {
             uint8_t newValueByte = uint8_t(newValue & 0xFF);
             if (bitValue) {
-              newValueByte |= 1 << bitIndex;
+              newValueByte |= setBit;
             } else {
-              newValueByte = newValue & ~(1 << bitIndex);
+              newValueByte = newValue & ~(setBit);
             }
             if (writeCvValue(cv, newValueByte)) {
               sendProgrammingAck();
@@ -258,13 +248,6 @@ void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t 
 }
 
 uint8_t lastReadMessageNumber = 0;
-
-int8_t currentSpeed = 0;
-bool currentDirection = false;
-bool lightOn = false;
-bool f1 = false;
-bool f2 = false;
-bool f3 = false;
 
 bool parseNewMessage() {
   if (lastReadMessageNumber == currentMessageNumber) {
@@ -286,7 +269,7 @@ bool parseNewMessage() {
     return true;
   }
 
-  if (dccMessage.length == 3 && dccMessage.data[0] == 0 && dccMessage.data[1] == 0) {
+  if (dccMessage.isGeneralReset()) {
     // General reset command
     if (decoderMode == DECODER_MODE_OPERATION) {
       TCCR1 = 0; // Stop timer
@@ -298,7 +281,7 @@ bool parseNewMessage() {
     return true;
   }
 
-  if (decoderMode != DECODER_MODE_OPERATION && (dccMessage.data[0] & 0xF0) == 0x70) {
+  if (decoderMode != DECODER_MODE_OPERATION && dccMessage.isPossiblyProgramming()) {
     decoderMode = DECODER_MODE_PROGRAMMING;
     processProgrammingMessage(dccMessage.data, dccMessage.length);
     return true;
@@ -308,161 +291,87 @@ bool parseNewMessage() {
     decoderMode = DECODER_MODE_OPERATION;
   }
 
-  if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0x80) {
-      // Accessory decoder
-      if ((dccMessage.data[1] & 0x80) == 0x80) {
-        // Basic accessory decoder: 10AA-AAAA 1AAA-DAAR
+  if (dccMessage.isBasicAccessoryMessage()) {
+    // Basic accessory decoder: 10AA-AAAA 1AAA-DAAR
+    // Address format is weird. See RCN213.
+    uint16_t decoderAddress = (dccMessage.data[0] & 0x3F) | (0x7 & ~((dccMessage.data[1] & 0x70) >> 4));
+    uint8_t port = (dccMessage.data[1] & 0x6) >> 1;
+    uint16_t outputAddress = (decoderAddress << 2 | port) - 3;
 
-        // Address format is weird. See RCN213.
-        uint16_t address = (dccMessage.data[0] & 0x3F) | (0x7 & ~((dccMessage.data[1] & 0x70) >> 4));
-        uint8_t port = (dccMessage.data[1] & 0x6) >> 1;
-        uint16_t addressRcn213 = (address << 2 | port) - 3;
+    /*
+     * Weirdness with ESU command stations:
+     * If you switch address DCC 10 to left, it interprets and transmits that as
+     * decoder address = 2, port = 2
+     * However, if you do a POM to set some CV for DCC 10, it interprets that as
+     * decoder addres = 10, port = 0
+     * Not sure why, it's very annoying.
+     */
 
-        bool direction = dccMessage.data[1] & 0x1;
-        bool turnOn = dccMessage.data[1] & 0x8;
-        if (addressRcn213 == 2047 && !direction && !turnOn) {
-          // Emergency turn off. Not sure it helps if the signal goes dark but why not.
-          memset(signalHeadColors, 0, sizeof(signalHeadColors));
-          ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
-          decoderMode = DECODER_MODE_EMERGENCY_STOP;
-        }
+    //uint16_t addressRcn213 = dccMessage.getAccessoryOutputAddress();
+    bool direction = dccMessage.data[1] & 0x1;
+    bool bitC = dccMessage.data[1] & 0x8; // For normal mode: "turn on/off". For PoM: "whole decoder/single output"
+    // Note that RCN 214 deprecates this use of bitC for PoM, but my ESU command station still uses it, so it stays.
+    if (outputAddress == 2047 && !direction && !bitC) {
+      // Emergency turn off. Not sure it helps if the signal goes dark but why not.
+      memset(signalHeadColors, 0, sizeof(signalHeadColors));
+      ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
+      decoderMode = DECODER_MODE_EMERGENCY_STOP;
+      return true;
+    }
 
-        // Every signal head gets three addresses: red/green, lunar/yellow, flashing on/off
-        if (addressRcn213 < config::values.address ||
-          addressRcn213 >= config::values.address + config::values.activeSignalHeads * 3) {
-          return false;
-        }
-        decoderMode = DECODER_MODE_OPERATION;
-        
-        if (!turnOn) {
-          // Message with flag turnOff gets sent whenever the command station thinks we've sent power
-          // through the attached solenoid coils for long enough. For anything not controlling solenoids,
-          // this message is completely irrelevant.
-
-          // TODO If we were to add Railcom then this would be a place where we'd need to ack.
-          return false;
-        }
-
-        // For POM:
-        if (direction == false && turnOn == true && dccMessage.length > 3 && (dccMessage.data[2] & 0xF0) == 0xE0) {
-          // POM commands
-          processProgrammingMessage(&dccMessage.data[2], dccMessage.length - 2);
+    if (dccMessage.length == 6 && (dccMessage.data[2] & 0xF0) == 0xE0) {
+      // POM, but is it our address?
+      if ((config::values.workarounds & config::WORKAROUND_BIT_POM_ADDRESSING) && !bitC) {
+        // Workaround: When switching "10", ESU command stations send "decoder 2 port 2" or whatever,
+        // but when doing "POM set CV for address 10", they send "decoder 10 port 0". Maddening.
+        // This workaround interprets that as meant for this decoder, which makes life a little
+        // easier. Not sure it's a good idea though.
+        if (decoderAddress != config::values.address) {
           return true;
         }
-
-        uint8_t relativeAddress = uint8_t(addressRcn213 - config::values.address);
-        uint8_t signalHead = relativeAddress/3;
-        uint8_t relativeField = relativeAddress - signalHead*3;
-        // Invert number so signal head 0 is the top one
-        uint8_t invertedSignalHead = config::values.activeSignalHeads - 1 - signalHead;
-        if (relativeField == 0) {
-          // dir=0: red, dir=1: green
-          signalHeads[invertedSignalHead].setColor(direction ? Colors::GREEN : Colors::RED);
-        } else if (relativeField == 1) {
-          // dir=0: lunar, dir=1: yellow
-          signalHeads[invertedSignalHead].setColor(direction ? Colors::YELLOW : Colors::LUNAR);
-        } else if (relativeField == 2) {
-          // dir=0: flashing off, dir=1: flashing on
-          signalHeads[invertedSignalHead].setFlashing(direction);
+      } else {
+        if (outputAddress < config::values.address ||
+          outputAddress >= config::values.address + config::values.activeSignalHeads * 3) {
+          return true;
         }
       }
-  }
-
-  /*volatile const uint8_t *commandStart;
-  uint8_t commandLength;
-  bool isLocomotive = false;
-  if ((dccMessage.data[0] & 0x80) == 0) {
-    // Short address
-    commandStart = dccMessage.data + 1;
-    commandLength = dccMessage.length - 1;
-    messageAddress = dccMessage.data[0];
-    isLocomotive = true;
-  } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0xC0) {
-    // Long address
-    commandStart = dccMessage.data + 2;
-    commandLength = dccMessage.length - 2;
-    messageAddress = dccMessage.data[1] | (uint16_t(dccMessage.data[0] & 0x3F) << 8);
-    isLocomotive = true;
-  } else if (dccMessage.length >= 3 && (dccMessage.data[0] & 0xC0) == 0x80) {
-    // Accessory decoder
-    commandStart = dccMessage.data + 2;
-    commandLength = dccMessage.length - 2;
-
-    // Address format is weird. See RCN213.
-    uint16_t address = (dccMessage.data[0] & 0x3F) | (0x7 & ~((dccMessage.data[1] & 0x70) >> 4));
-    uint8_t port = (dccMessage.data[1] & 0x6) >> 1;
-    uint16_t addressRcn213 = (address << 2 | port) - 3;
-    if ((dccMessage.data[1] & 0x80) == 0x80) {
-      bool direction = dccMessage.data[1] & 0x1;
-      bool turnOn = dccMessage.data[1] & 0x8;
-      // Basic accessory decoder: 10AA-AAAA 1AAA-DAAR
-      // For POM: 
-    } else if ((dccMessage.data[1] & 0x89) == 0x01) {
-      // Extended accessory decoder: 10AA-AAAA 0AAA-0AA1 DDDD-DDDD
+      processProgrammingMessage(&dccMessage.data[2], dccMessage.length - 2);
+      return true;
     }
-  } else {
+
+    // Every signal head gets three addresses: red/green, lunar/yellow, flashing on/off
+    if (outputAddress < config::values.address ||
+      outputAddress >= config::values.address + config::values.activeSignalHeads * 3) {
+      return true;
+    }
+    decoderMode = DECODER_MODE_OPERATION;
+    
+    if (!bitC) {
+      // Message with flag C=0/turnOff gets sent whenever the command station thinks we've sent power
+      // through the attached solenoid coils for long enough. For anything not controlling solenoids,
+      // this message is completely irrelevant.
+
+      // TODO But if we were to add Railcom then this would be a place where we'd need to ack.
+      return true;
+    }
+
+    uint8_t relativeAddress = uint8_t(outputAddress - config::values.address);
+    uint8_t signalHead = relativeAddress/3;
+    uint8_t relativeField = relativeAddress - signalHead*3;
+    // Invert number so signal head 0 is the top one
+    uint8_t invertedSignalHead = config::values.activeSignalHeads - 1 - signalHead;
+    if (relativeField == 0) {
+      // dir=0: red, dir=1: green
+      signalHeads[invertedSignalHead].setColor(direction ? Colors::GREEN : Colors::RED);
+    } else if (relativeField == 1) {
+      // dir=0: lunar, dir=1: yellow
+      signalHeads[invertedSignalHead].setColor(direction ? Colors::YELLOW : Colors::LUNAR);
+    } else if (relativeField == 2) {
+      // dir=0: flashing off, dir=1: flashing on
+      signalHeads[invertedSignalHead].setFlashing(direction);
+    }
     return true;
   }
-
-  if (messageAddress != address) {
-    return true; // Not our locomotive
-  }
-
-  if (commandLength == 4 && (commandStart[0] & 0xF0) == 0xE0) {
-    // POM commands
-    processProgrammingMessage(commandStart, commandLength);
-    return true;
-  }
-
-  if (commandLength == 2 && (commandStart[0] & 0xC0) == 0x40) {
-    // Basic speed and direction: 01RG-GGGG
-    // But! The first G is the last G
-    // (they later used the free bit after R to give one bit more precision for G, and the bit was freed because they rethought how functions work).
-    currentSpeed = ((commandStart[0] & 0xF) << 1) | ((commandStart[0] & 0x10) >> 4);
-    currentSpeed = currentSpeed << 2; // Super, super simple mapping to 127 steps, yes it won't reach 127, I don't care this is debug only
-    currentDirection = (commandStart[0] & 0x20) == 0x20;
-  } else if (commandLength == 3 && commandStart[0] == 0x3F) {
-    // 127 step speed packet 0011-1111 RGGG-GGGG
-    currentSpeed = commandStart[1] & 0x7F;
-    currentDirection = (commandStart[1] & 0x80) == 0x80;
-  } else if (commandLength >= 4 && commandStart[0] == 0x3C) {
-    // Speed, direction and up to 32 functions 0011-1100 RGGG-GGGG
-    currentSpeed = commandStart[1] & 0x7F;
-    currentDirection = (commandStart[1] & 0x80) == 0x80;
-    lightOn = (commandStart[2] & 0x01) == 0x01;
-    f1 = (commandStart[2] & 0x02) == 0x02;
-    f2 = (commandStart[2] & 0x04) == 0x04;
-    f3 = (commandStart[2] & 0x08) == 0x08;
-  } else if (commandLength == 2 && (commandStart[0] & 0xE0) == 0x80) {
-    // Functions F0-F4 100D-DDDD, with bit0 = F1, bit3 = F4, bit4 = F0 for some reason
-    uint8_t command = commandStart[0];
-    lightOn = (command & 0x10);
-    f1 = (command & 0x01) == 0x01;
-    f2 = (command & 0x02) == 0x02;
-    f3 = (command & 0x04) == 0x04;
-  } else {
-    return true;
-  }
-  
-  if (currentSpeed < 50) {
-    signalHeads[0].setColor(Colors::RED);
-  } else if (currentSpeed < 100) {
-    signalHeads[0].setColor(Colors::YELLOW);
-  } else {
-    signalHeads[0].setColor(Colors::GREEN);
-  }
-  signalHeads[0].setFlashing(lightOn);
-
-  if (!f1 && !f2) {
-    signalHeads[1].setColor(Colors::RED);
-  } else if (f1 && !f2) {
-    signalHeads[1].setColor(Colors::GREEN);
-  } else if (!f1 && f2) {
-    signalHeads[1].setColor(Colors::YELLOW);
-  } else if (f1 && f2) {
-    signalHeads[1].setColor(Colors::LUNAR);
-  }
-  signalHeads[1].setFlashing(f3);*/
 
   return true;
 }
