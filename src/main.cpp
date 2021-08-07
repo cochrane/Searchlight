@@ -16,20 +16,15 @@
 #define PIN_LED        _BV(PB3)
 
 /*
- * PB1: ACK (=MISO = oben rechts an schnittstelle)
  * PB2: DCC Input
  * PB3: LEDs
+ * PB4: ACK
+ * Timer 0: Handles DCC
+ * Timer 1: Handles animation in normal mode, ack pulse in programming (same settings)
  */
 
 // The pin to use for acknowledgements
 #define ACK_PIN_MASK  _BV(PB4)
-
-/*
-   PB2: DCC Input
-   PB3: LED Output
-   Timer 0: Handles DCC
-   Timer 1: Handles animation, ack pulse
-*/
 
 enum DecoderMode {
   DECODER_MODE_OPERATION = 0,
