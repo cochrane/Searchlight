@@ -72,11 +72,11 @@ void SignalHead::updateColor(uint8_t *colors) {
         switchingTo = nextAfter;
         nextAfter = Colors::UNDEFINED;
 
+        uint8_t newAnimationIndex = ANIMATION_START_SWITCH_INTERMEDIATE_RED;
         if (switchingFrom == Colors::RED || switchingTo == Colors::RED) {
-            colorSwitching.setAnimation(ANIMATION_START_SWITCH_DIRECT);
-        } else {
-            colorSwitching.setAnimation(ANIMATION_START_SWITCH_INTERMEDIATE_RED);
+            newAnimationIndex = ANIMATION_START_SWITCH_DIRECT;
         }
+        colorSwitching.setAnimation(newAnimationIndex);
     }
 
     if (isFlashing || !flashing.isComplete()) {

@@ -53,6 +53,7 @@ enum DccReceiveState: uint8_t {
   DCC_RECEIVE_STATE_AWAIT_SEPARATOR
 };
 DccReceiveState receiveState;
+uint8_t runningXor = 0;
 
 volatile DccMessage dccMessage;
 volatile uint8_t currentMessageNumber = 0;
@@ -93,6 +94,7 @@ ISR(TIMER0_COMPA_vect) {
         receiveState = DCC_RECEIVE_STATE_BYTE_READING_BIT0;
         dccMessage.length = 0;
         dccMessage.data[0] = 0;
+        runningXor = 0;
       }
       break;
     case DCC_RECEIVE_STATE_BYTE_READING_BIT0:
@@ -107,11 +109,14 @@ ISR(TIMER0_COMPA_vect) {
       receiveState = DccReceiveState(receiveState + 1);
       break;
     case DCC_RECEIVE_STATE_AWAIT_SEPARATOR:
+      runningXor ^= dccMessage.data[dccMessage.length];
       dccMessage.length += 1;
       if (bitValue) {
         // End of packet
         receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
-        currentMessageNumber += 1;
+        if (runningXor == 0) {
+          currentMessageNumber += 1;
+        }
       } else {
         // Another byte follows
         if (dccMessage.length >= sizeof(dccMessage.data)) {

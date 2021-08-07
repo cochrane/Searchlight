@@ -16,6 +16,15 @@
 #define PIN_LED        _BV(PB3)
 
 /*
+ * PB1: ACK (=MISO = oben rechts an schnittstelle)
+ * PB2: DCC Input
+ * PB3: LEDs
+ */
+
+// The pin to use for acknowledgements
+#define ACK_PIN_MASK  _BV(PB4)
+
+/*
    PB2: DCC Input
    PB3: LED Output
    Timer 0: Handles DCC
@@ -42,15 +51,23 @@ const uint8_t CV_INDEX_COLOR_BASE = 48;
 const uint8_t CV_INDEX_COLOR_LENGTH = 3 * Colors::COUNT;
 
 SignalHead signalHeads[config::MAX_NUM_SIGNAL_HEADS];
-uint8_t signalHeadColors[3*config::MAX_NUM_SIGNAL_HEADS] = { 0 };
+uint8_t signalHeadColors[3*config::MAX_NUM_SIGNAL_HEADS];
+
+void turnLedsOff() {
+    memset(signalHeadColors, 0, sizeof(signalHeadColors));
+    ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
+}
 
 // Timer1 has fired.
 ISR(TIMER1_COMPA_vect) {
   TCNT1 = 0;
   if (decoderMode == DECODER_MODE_SENDING_ACK) {
     TCCR1 = 0; // Stop timer
-    memset(signalHeadColors, 0, sizeof(signalHeadColors));
-    ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
+#ifdef ACK_VIA_LEDS
+    turnLedsOff();
+#else
+    PORTB &= ~ACK_PIN_MASK;
+#endif
     decoderMode = DECODER_MODE_PROGRAMMING;
   } else if (decoderMode == DECODER_MODE_OPERATION) {
     // Runs as animation timer
@@ -59,6 +76,8 @@ ISR(TIMER1_COMPA_vect) {
 }
 
 void setup() {
+  turnLedsOff();
+
   // Load address from EEPROM
   config::loadConfiguration();
   Colors::loadColorsFromEeprom();
@@ -69,10 +88,13 @@ void setup() {
   // DCC Input
   setupDccInt0PB2();
 
+#ifndef ACK_VIA_LEDS
+  DDRB |= ACK_PIN_MASK;
+  PORTB &= ~ACK_PIN_MASK;
+#endif
+
   // Prepare timer 1 for animation purposes
   SignalHead::setupTimer1();
-  
-  ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
   sei();
 }
 
@@ -114,9 +136,13 @@ void sendProgrammingAck() {
   if (decoderMode == DECODER_MODE_OPERATION) {
     return;
   }
+#ifdef ACK_VIA_LEDS
   // Increase power consumption (and hope this is enough…)
   memset(signalHeadColors, 255, config::values.activeSignalHeads*3);
   ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
+#else
+  PORTB |= ACK_PIN_MASK;
+#endif
 
   decoderMode = DECODER_MODE_SENDING_ACK;
   
@@ -224,7 +250,7 @@ void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t 
           // Verify bit
           // Recommendation in RCN214: Confirm any bit value for CVs we don't have
           uint16_t value = getCvValue(cv);
-          if (value > 0xFF || (value & setBit)) {
+          if (value > 0xFF || (bitValue ^ ((value & setBit) == 0))) {
             sendProgrammingAck();
           }
         } else {
@@ -253,16 +279,7 @@ bool parseNewMessage() {
   if (lastReadMessageNumber == currentMessageNumber) {
     return false;
   }
-
-    // Process message
   lastReadMessageNumber = currentMessageNumber;
-  uint8_t checksum = 0;
-  for (uint8_t i = 0; i < dccMessage.length; i++) {
-    checksum ^= dccMessage.data[i];
-  }
-  if (checksum != 0 || dccMessage.length < 2) {
-    return true;
-  }
 
   if (decoderMode == DECODER_MODE_SENDING_ACK) {
     // There's an ACK currently going out so ignore all messages (which are just other "Programming" messages anyway)
@@ -273,8 +290,7 @@ bool parseNewMessage() {
     // General reset command
     if (decoderMode == DECODER_MODE_OPERATION) {
       TCCR1 = 0; // Stop timer
-      memset(signalHeadColors, 0, sizeof(signalHeadColors));
-      ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
+      turnLedsOff();
       lastProgrammingMessage.length = 0;
       decoderMode = DECODER_MODE_RESET_RECEIVED;
     }
@@ -306,15 +322,12 @@ bool parseNewMessage() {
      * decoder addres = 10, port = 0
      * Not sure why, it's very annoying.
      */
-
-    //uint16_t addressRcn213 = dccMessage.getAccessoryOutputAddress();
     bool direction = dccMessage.data[1] & 0x1;
     bool bitC = dccMessage.data[1] & 0x8; // For normal mode: "turn on/off". For PoM: "whole decoder/single output"
     // Note that RCN 214 deprecates this use of bitC for PoM, but my ESU command station still uses it, so it stays.
     if (outputAddress == 2047 && !direction && !bitC) {
       // Emergency turn off. Not sure it helps if the signal goes dark but why not.
-      memset(signalHeadColors, 0, sizeof(signalHeadColors));
-      ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
+      turnLedsOff();
       decoderMode = DECODER_MODE_EMERGENCY_STOP;
       return true;
     }
@@ -326,6 +339,7 @@ bool parseNewMessage() {
         // but when doing "POM set CV for address 10", they send "decoder 10 port 0". Maddening.
         // This workaround interprets that as meant for this decoder, which makes life a little
         // easier. Not sure it's a good idea though.
+        // Note that it clears the "C" bit in that case.
         if (decoderAddress != config::values.address) {
           return true;
         }
