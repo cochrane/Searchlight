@@ -71,11 +71,12 @@ struct DccMessage {
 // starts getting overwritten again.
 // A safer double-buffer technique is possible but pointless.
 extern volatile DccMessage dccMessage;
-// The counter for messages; increases by one every time a new complete message has been read.
-extern volatile uint8_t currentMessageNumber;
 
 // Called in setup the pin mode and interrupt
 void setupDccInt0PB2();
 
 // Called in setup to prepare the Timer0 used for DCC reading.
 void setupDccTimer0();
+
+// Returns whether a new DCC message has been received since the last time this function was called.
+bool hasNewDccMessage();

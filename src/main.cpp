@@ -26,7 +26,7 @@
 // The pin to use for acknowledgements
 #define ACK_PIN_MASK  _BV(PB4)
 
-enum DecoderMode {
+enum DecoderMode: uint8_t {
   DECODER_MODE_OPERATION = 0,
   DECODER_MODE_EMERGENCY_STOP,
   DECODER_MODE_RESET_RECEIVED,
@@ -245,7 +245,7 @@ void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t 
           // Verify bit
           // Recommendation in RCN214: Confirm any bit value for CVs we don't have
           uint16_t value = getCvValue(cv);
-          if (value > 0xFF || (bitValue ^ ((value & setBit) == 0))) {
+          if (value > 0xFF || ((uint8_t(value) & setBit) == uint8_t(bitValue << bitIndex))) {
             sendProgrammingAck();
           }
         } else {
@@ -256,7 +256,7 @@ void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t 
             if (bitValue) {
               newValueByte |= setBit;
             } else {
-              newValueByte = newValue & ~(setBit);
+              newValueByte &= ~setBit;
             }
             if (writeCvValue(cv, newValueByte)) {
               sendProgrammingAck();
@@ -268,17 +268,10 @@ void processProgrammingMessage(const volatile uint8_t *relevantMessage, uint8_t 
   }
 }
 
-uint8_t lastReadMessageNumber = 0;
-
-bool parseNewMessage() {
-  if (lastReadMessageNumber == currentMessageNumber) {
-    return false;
-  }
-  lastReadMessageNumber = currentMessageNumber;
-
+inline void parseNewMessage() {
   if (decoderMode == DECODER_MODE_SENDING_ACK) {
     // There's an ACK currently going out so ignore all messages (which are just other "Programming" messages anyway)
-    return true;
+    return;
   }
 
   if (dccMessage.isGeneralReset()) {
@@ -289,13 +282,13 @@ bool parseNewMessage() {
       lastProgrammingMessage.length = 0;
       decoderMode = DECODER_MODE_RESET_RECEIVED;
     }
-    return true;
+    return;
   }
 
   if (decoderMode != DECODER_MODE_OPERATION && dccMessage.isPossiblyProgramming()) {
     decoderMode = DECODER_MODE_PROGRAMMING;
     processProgrammingMessage(dccMessage.data, dccMessage.length);
-    return true;
+    return;
   }
 
   if (decoderMode != DECODER_MODE_EMERGENCY_STOP) {
@@ -324,7 +317,7 @@ bool parseNewMessage() {
       // Emergency turn off. Not sure it helps if the signal goes dark but why not.
       turnLedsOff();
       decoderMode = DECODER_MODE_EMERGENCY_STOP;
-      return true;
+      return;
     }
 
     if (dccMessage.length == 6 && (dccMessage.data[2] & 0xF0) == 0xE0) {
@@ -336,22 +329,22 @@ bool parseNewMessage() {
         // easier. Not sure it's a good idea though.
         // Note that it clears the "C" bit in that case.
         if (decoderAddress != config::values.address) {
-          return true;
+          return;
         }
       } else {
         if (outputAddress < config::values.address ||
           outputAddress >= config::values.address + config::values.activeSignalHeads * 3) {
-          return true;
+          return;
         }
       }
       processProgrammingMessage(&dccMessage.data[2], dccMessage.length - 2);
-      return true;
+      return;
     }
 
     // Every signal head gets three addresses: red/green, lunar/yellow, flashing on/off
     if (outputAddress < config::values.address ||
       outputAddress >= config::values.address + config::values.activeSignalHeads * 3) {
-      return true;
+      return;
     }
     decoderMode = DECODER_MODE_OPERATION;
     
@@ -361,7 +354,7 @@ bool parseNewMessage() {
       // this message is completely irrelevant.
 
       // TODO But if we were to add Railcom then this would be a place where we'd need to ack.
-      return true;
+      return;
     }
 
     uint8_t relativeAddress = uint8_t(outputAddress - config::values.address);
@@ -379,14 +372,11 @@ bool parseNewMessage() {
       // dir=0: flashing off, dir=1: flashing on
       signalHeads[invertedSignalHead].setFlashing(direction);
     }
-    return true;
   }
-
-  return true;
 }
 
 uint8_t lastAnimationTimestep = 1;
-bool updateAnimation() {
+inline bool updateAnimation() {
   if (animationTimestep == lastAnimationTimestep) {
     return false;
   }
@@ -414,9 +404,10 @@ bool updateAnimation() {
   return true;
 }
 
-void loop() {
+inline void loop() {
   bool didSomething = false;
-  if (parseNewMessage()) {
+  if (hasNewDccMessage()) {
+    parseNewMessage();
     didSomething = true;
   }
   if (decoderMode == DECODER_MODE_OPERATION && updateAnimation()) {

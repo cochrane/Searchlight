@@ -25,8 +25,6 @@ class AnimationPlayer {
     uint8_t phaseTimestep;
     uint8_t phaseIndex;
 
-    const uint8_t *select(const uint8_t *a, const uint8_t *b, uint8_t index);
-
     const AnimationPhase *getCurrentPhase();
 public:
     AnimationPlayer(uint8_t initialAnimation);

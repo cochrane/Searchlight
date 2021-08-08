@@ -7,6 +7,9 @@ const uint8_t DCC_TIME_ONE = 58;
 const uint8_t DCC_TIME_ZERO = 100;
 const uint8_t DCC_WAIT_TIME = (uint16_t(DCC_TIME_ONE) + uint16_t(DCC_TIME_ZERO)) / 2;
 
+volatile DccMessage dccMessage;
+volatile uint8_t currentMessageNumber = 0;
+
 void setupDccInt0PB2() {
   // PB2: DCC Input  
   PORTB &= ~(1 << PB2);
@@ -22,6 +25,16 @@ void setupDccTimer0() {
   TCCR0A = 0;// Normal mode
   TCCR0B = 0; // Timer stopped (for now, turned on in ISR(INT0_vect).)
   TIMSK = (1 << OCIE0A) | (1 << OCIE1A); // Interrupts on
+}
+
+uint8_t lastReadMessageNumber = 0;
+
+bool hasNewDccMessage() {
+  bool changed = (lastReadMessageNumber != currentMessageNumber);
+  if (changed) {
+    lastReadMessageNumber = currentMessageNumber;
+  }
+  return changed;
 }
 
 enum DccReceiveState: uint8_t {
@@ -54,9 +67,6 @@ enum DccReceiveState: uint8_t {
 };
 DccReceiveState receiveState;
 uint8_t runningXor = 0;
-
-volatile DccMessage dccMessage;
-volatile uint8_t currentMessageNumber = 0;
 
 // Low on DCC in received.
 ISR(INT0_vect) {
