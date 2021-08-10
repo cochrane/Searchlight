@@ -384,19 +384,20 @@ inline bool updateAnimation() {
   lastAnimationTimestep = animationTimestep;
 
   for (int i = 0; i < config::values.activeSignalHeads; i++) {
-    signalHeads[i].updateColor(&signalHeadColors[i*3]);
+    uint8_t *color = &signalHeadColors[i*3];
+    signalHeads[i].updateColor(color);
 
     if (config::values.colorOrder == config::Configuration::COLOR_ORDER_GRB) {
       // Swap colors for WS2812
-      uint8_t red = signalHeadColors[i*3 + 0];
-      uint8_t green = signalHeadColors[i*3 + 1];
-      signalHeadColors[i*3 + 0] = green;
-      signalHeadColors[i*3 + 1] = red;
+      uint8_t red = color[0];
+      uint8_t green = color[1];
+      color[0] = green;
+      color[1] = red;
     }
-  }
-  if (config::values.brightness < config::BRIGHTNESS_MAX) {
-    for (int i = 0; i < config::values.activeSignalHeads*3; i++) {
-      signalHeadColors[i] = (uint16_t(signalHeadColors[i]) * config::values.brightness) / config::BRIGHTNESS_MAX;
+    if (config::values.brightness < config::BRIGHTNESS_MAX) {
+      color[0] = (uint16_t(color[0]) * config::values.brightness) / config::BRIGHTNESS_MAX;
+      color[1] = (uint16_t(color[1]) * config::values.brightness) / config::BRIGHTNESS_MAX;
+      color[2] = (uint16_t(color[2]) * config::values.brightness) / config::BRIGHTNESS_MAX;
     }
   }
   ws2812_sendarray_mask(signalHeadColors, config::values.activeSignalHeads*3, PIN_LED);
