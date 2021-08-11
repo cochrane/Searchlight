@@ -1,5 +1,6 @@
 #include <stdint.h>
 
+namespace dccdecode {
 /*!
  * Reading DCC data.
  * On ATTiny85, this uses:
@@ -8,7 +9,7 @@
  */
 
 // Stores the DCC message with length and data.
-struct DccMessage {
+struct Message {
   uint8_t length = 0;
   uint8_t data[10];
 
@@ -70,13 +71,15 @@ struct DccMessage {
 // one. The rest of the code then has until the end of the next preamble to read it, before it
 // starts getting overwritten again.
 // A safer double-buffer technique is possible but pointless.
-extern volatile DccMessage dccMessage;
+extern volatile Message message;
 
 // Called in setup the pin mode and interrupt
-void setupDccInt0PB2();
+void setupInt0PB2();
 
 // Called in setup to prepare the Timer0 used for DCC reading.
-void setupDccTimer0();
+void setupTimer0();
 
 // Returns whether a new DCC message has been received since the last time this function was called.
-bool hasNewDccMessage();
+bool hasNewMessage();
+
+}

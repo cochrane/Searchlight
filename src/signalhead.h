@@ -6,7 +6,7 @@
 
 class SignalHead {
 public:
-    void setColor(Colors::ColorName color);
+    void setColor(colors::ColorName color);
     void setFlashing(bool flashing);
 
     void updateColor(uint8_t *color);
@@ -16,9 +16,9 @@ public:
     static void setupTimer1();
 
 private:
-    Colors::ColorName switchingFrom = Colors::RED;
-    Colors::ColorName switchingTo = Colors::RED;
-    Colors::ColorName nextAfter = Colors::UNDEFINED;
+    colors::ColorName switchingFrom = colors::RED;
+    colors::ColorName switchingTo = colors::RED;
+    colors::ColorName nextAfter = colors::UNDEFINED;
     bool isFlashing = false;
 
     AnimationPlayer colorSwitching;

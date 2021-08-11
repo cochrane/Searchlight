@@ -44,42 +44,42 @@ void SignalHead::setupTimer1() {
     // Run roughly every twenty milliseconds
     OCR1A = 156;
     TCNT1 = 0;
-    TCCR1 = (1 << CTC1) | (1 << CS13) | (1 << CS11) | (1 << CS10); // Normal mode, clear on OCR1A match, run immediately with CLK/1024
+    TCCR1 = (1 << CS13) | (1 << CS11) | (1 << CS10); // Normal mode, clear on OCR1A match, run immediately with CLK/1024
     TIMSK |= (1 << OCIE1A); // Interrupts on
 }
 
 SignalHead::SignalHead()
-: switchingFrom(Colors::RED),
-switchingTo(Colors::RED),
-nextAfter(Colors::UNDEFINED),
+: switchingFrom(colors::RED),
+switchingTo(colors::RED),
+nextAfter(colors::UNDEFINED),
 isFlashing(false),
 colorSwitching(ANIMATION_SWITCH_DONE),
 flashing(ANIMATION_START_FLASHING)
 {
 }
 
-void SignalHead::setColor(Colors::ColorName color) {
+void SignalHead::setColor(colors::ColorName color) {
     if (switchingTo != color) {
         nextAfter = color;
     }
 }
 
 void SignalHead::updateColor(uint8_t *colors) {
-    colorSwitching.updateColor((const uint8_t *) &Colors::colorValues[switchingFrom], (const uint8_t *) &Colors::colorValues[switchingTo], colors);
+    colorSwitching.updateColor((const uint8_t *) &colors::colorValues[switchingFrom], (const uint8_t *) &colors::colorValues[switchingTo], colors);
 
-    if (colorSwitching.isComplete() && nextAfter != Colors::UNDEFINED) {
+    if (colorSwitching.isComplete() && nextAfter != colors::UNDEFINED) {
         switchingFrom = switchingTo;
         switchingTo = nextAfter;
-        nextAfter = Colors::UNDEFINED;
+        nextAfter = colors::UNDEFINED;
 
         uint8_t newAnimationIndex = ANIMATION_START_SWITCH_INTERMEDIATE_RED;
-        if (switchingFrom == Colors::RED || switchingTo == Colors::RED) {
+        if (switchingFrom == colors::RED || switchingTo == colors::RED) {
             newAnimationIndex = ANIMATION_START_SWITCH_DIRECT;
         }
         colorSwitching.setAnimation(newAnimationIndex);
     }
 
     if (isFlashing || !flashing.isComplete()) {
-        flashing.updateColor(colors, (const uint8_t *) &Colors::colorValues[Colors::UNDEFINED], colors);
+        flashing.updateColor(colors, (const uint8_t *) &colors::colorValues[colors::UNDEFINED], colors);
     }
 }

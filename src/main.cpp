@@ -43,7 +43,7 @@ volatile uint8_t animationTimestep = 0;
 
 // Color values
 const uint8_t CV_INDEX_COLOR_BASE = 48;
-const uint8_t CV_INDEX_COLOR_LENGTH = 3 * Colors::COUNT;
+const uint8_t CV_INDEX_COLOR_LENGTH = 3 * colors::COUNT;
 
 SignalHead signalHeads[config::MAX_NUM_SIGNAL_HEADS];
 uint8_t signalHeadColors[3*config::MAX_NUM_SIGNAL_HEADS];
@@ -75,13 +75,13 @@ void setup() {
 
   // Load address from EEPROM
   config::loadConfiguration();
-  Colors::loadColorsFromEeprom();
+  colors::loadColorsFromEeprom();
 
   // Timer 0: Measures DCC signal
-  setupDccTimer0();
+  dccdecode::setupTimer0();
 
   // DCC Input
-  setupDccInt0PB2();
+  dccdecode::setupInt0PB2();
 
 #ifndef ACK_VIA_LEDS
   DDRB |= ACK_PIN_MASK;
@@ -96,7 +96,7 @@ void setup() {
 // Values <= 255 are actual values, anything else means "CV not supported"
 uint16_t getCvValue(uint16_t cvIndex) {
   if (cvIndex >= CV_INDEX_COLOR_BASE && cvIndex < CV_INDEX_COLOR_BASE + CV_INDEX_COLOR_LENGTH) {
-    return Colors::getColorValue(cvIndex - CV_INDEX_COLOR_BASE);
+    return colors::getColorValue(cvIndex - CV_INDEX_COLOR_BASE);
   }
 
   switch (cvIndex) {
@@ -108,7 +108,7 @@ uint16_t getCvValue(uint16_t cvIndex) {
 
 bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
   if (cvIndex >= CV_INDEX_COLOR_BASE && cvIndex < CV_INDEX_COLOR_BASE + CV_INDEX_COLOR_LENGTH) {
-    Colors::writeColorValueToEeprom(cvIndex - CV_INDEX_COLOR_BASE, newValue);
+    colors::writeColorValueToEeprom(cvIndex - CV_INDEX_COLOR_BASE, newValue);
     return true;
   }
 
@@ -117,7 +117,7 @@ bool writeCvValue(uint16_t cvIndex, uint8_t newValue) {
       if (newValue == 8) {
         // Total reset of everything
         // There is special logic in the standard for when the reset takes longer, but we don't need that here.
-        Colors::restoreDefaultColorsToEeprom();
+        colors::restoreDefaultColorsToEeprom();
         config::resetConfigurationToDefault();
         return true;
       }
@@ -151,7 +151,7 @@ void sendProgrammingAck() {
 }
 
 // Message stored by the decoder in programming mode; length = 0 if not used.
-DccMessage lastProgrammingMessage;
+dccdecode::Message lastProgrammingMessage;
 
 // Page for paged mode addressing. We support this mainly because implementing it was fun.
 // Note: Our internal page is 0-based even though the protocol transmits 1 based, because
@@ -274,7 +274,7 @@ inline void parseNewMessage() {
     return;
   }
 
-  if (dccMessage.isGeneralReset()) {
+  if (dccdecode::message.isGeneralReset()) {
     // General reset command
     if (decoderMode == DECODER_MODE_OPERATION) {
       TCCR1 = 0; // Stop timer
@@ -285,9 +285,9 @@ inline void parseNewMessage() {
     return;
   }
 
-  if (decoderMode != DECODER_MODE_OPERATION && dccMessage.isPossiblyProgramming()) {
+  if (decoderMode != DECODER_MODE_OPERATION && dccdecode::message.isPossiblyProgramming()) {
     decoderMode = DECODER_MODE_PROGRAMMING;
-    processProgrammingMessage(dccMessage.data, dccMessage.length);
+    processProgrammingMessage(dccdecode::message.data, dccdecode::message.length);
     return;
   }
 
@@ -295,11 +295,11 @@ inline void parseNewMessage() {
     decoderMode = DECODER_MODE_OPERATION;
   }
 
-  if (dccMessage.isBasicAccessoryMessage()) {
+  if (dccdecode::message.isBasicAccessoryMessage()) {
     // Basic accessory decoder: 10AA-AAAA 1AAA-DAAR
     // Address format is weird. See RCN213.
-    uint16_t decoderAddress = (dccMessage.data[0] & 0x3F) | (0x7 & ~((dccMessage.data[1] & 0x70) >> 4));
-    uint8_t port = (dccMessage.data[1] & 0x6) >> 1;
+    uint16_t decoderAddress = (dccdecode::message.data[0] & 0x3F) | (0x7 & ~((dccdecode::message.data[1] & 0x70) >> 4));
+    uint8_t port = (dccdecode::message.data[1] & 0x6) >> 1;
     uint16_t outputAddress = (decoderAddress << 2 | port) - 3;
 
     /*
@@ -310,8 +310,8 @@ inline void parseNewMessage() {
      * decoder addres = 10, port = 0
      * Not sure why, it's very annoying.
      */
-    bool direction = dccMessage.data[1] & 0x1;
-    bool bitC = dccMessage.data[1] & 0x8; // For normal mode: "turn on/off". For PoM: "whole decoder/single output"
+    bool direction = dccdecode::message.data[1] & 0x1;
+    bool bitC = dccdecode::message.data[1] & 0x8; // For normal mode: "turn on/off". For PoM: "whole decoder/single output"
     // Note that RCN 214 deprecates this use of bitC for PoM, but my ESU command station still uses it, so it stays.
     if (outputAddress == 2047 && !direction && !bitC) {
       // Emergency turn off. Not sure it helps if the signal goes dark but why not.
@@ -320,7 +320,7 @@ inline void parseNewMessage() {
       return;
     }
 
-    if (dccMessage.length == 6 && (dccMessage.data[2] & 0xF0) == 0xE0) {
+    if (dccdecode::message.length == 6 && (dccdecode::message.data[2] & 0xF0) == 0xE0) {
       // POM, but is it our address?
       if ((config::values.workarounds & config::WORKAROUND_BIT_POM_ADDRESSING) && !bitC) {
         // Workaround: When switching "10", ESU command stations send "decoder 2 port 2" or whatever,
@@ -337,7 +337,7 @@ inline void parseNewMessage() {
           return;
         }
       }
-      processProgrammingMessage(&dccMessage.data[2], dccMessage.length - 2);
+      processProgrammingMessage(&dccdecode::message.data[2], dccdecode::message.length - 2);
       return;
     }
 
@@ -364,10 +364,10 @@ inline void parseNewMessage() {
     uint8_t invertedSignalHead = config::values.activeSignalHeads - 1 - signalHead;
     if (relativeField == 0) {
       // dir=0: red, dir=1: green
-      signalHeads[invertedSignalHead].setColor(direction ? Colors::GREEN : Colors::RED);
+      signalHeads[invertedSignalHead].setColor(direction ? colors::GREEN : colors::RED);
     } else if (relativeField == 1) {
       // dir=0: lunar, dir=1: yellow
-      signalHeads[invertedSignalHead].setColor(direction ? Colors::YELLOW : Colors::LUNAR);
+      signalHeads[invertedSignalHead].setColor(direction ? colors::YELLOW : colors::LUNAR);
     } else if (relativeField == 2) {
       // dir=0: flashing off, dir=1: flashing on
       signalHeads[invertedSignalHead].setFlashing(direction);
@@ -407,7 +407,7 @@ inline bool updateAnimation() {
 
 inline void loop() {
   bool didSomething = false;
-  if (hasNewDccMessage()) {
+  if (dccdecode::hasNewMessage()) {
     parseNewMessage();
     didSomething = true;
   }

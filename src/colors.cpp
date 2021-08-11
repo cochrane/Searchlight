@@ -3,7 +3,7 @@
 #include <avr/eeprom.h>
 #include <string.h>
 
-namespace Colors {
+namespace colors {
     const ColorRGB defaultColorValues[] = {
         ColorRGB(255, 0, 0), // RED - 2 - cv 48,49,50
         ColorRGB(0, 255, 0), // GREEN - 3 - cv 51,52,53

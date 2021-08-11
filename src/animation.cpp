@@ -27,7 +27,7 @@ static const uint8_t *select(const uint8_t *a, const uint8_t *b, uint8_t index) 
     switch (index) {
         case 0: return a;
         case 1: return b;
-        default: return (const uint8_t*) &Colors::colorValues[index-2];
+        default: return (const uint8_t*) &colors::colorValues[index-2];
     }
 }
 

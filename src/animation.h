@@ -19,7 +19,7 @@ struct AnimationPhase {
 
 // Must be defined elsewhere
 const extern AnimationPhase animations[];
-extern Colors::ColorRGB Colors::colorValues[];
+extern colors::ColorRGB colors::colorValues[];
 
 class AnimationPlayer {
     uint8_t phaseTimestep;

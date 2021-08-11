@@ -2,34 +2,38 @@
 
 #include <avr/interrupt.h>
 
+namespace dccdecode {
+
 // Times for DCC, assuming a 1 MHz timer (which we approximately get with f_cpu = 8Mhz and a prescaler of 8)
 const uint8_t DCC_TIME_ONE = 58;
 const uint8_t DCC_TIME_ZERO = 100;
 const uint8_t DCC_WAIT_TIME = (uint16_t(DCC_TIME_ONE) + uint16_t(DCC_TIME_ZERO)) / 2;
 
-volatile DccMessage dccMessage;
+volatile Message message;
 volatile uint8_t currentMessageNumber = 0;
 
-void setupDccInt0PB2() {
+const uint8_t DCC_PIN_MASK = (1 << PB2);
+
+void setupInt0PB2() {
   // PB2: DCC Input  
-  PORTB &= ~(1 << PB2);
-  DDRB &= ~(1 << PB2);
+  PORTB &= ~DCC_PIN_MASK;
+  DDRB &= ~DCC_PIN_MASK;
 
   // DCC Input interrupt
   MCUCR |= (1 << ISC01); // INT0 fires on falling edge
   GIMSK |= (1 << INT0);// Int0 is enabled
 }
 
-void setupDccTimer0() {
+void setupTimer0() {
   OCR0A = DCC_WAIT_TIME;
   TCCR0A = 0;// Normal mode
   TCCR0B = 0; // Timer stopped (for now, turned on in ISR(INT0_vect).)
-  TIMSK = (1 << OCIE0A) | (1 << OCIE1A); // Interrupts on
+  TIMSK |= (1 << OCIE0A); // Interrupts on
 }
 
 uint8_t lastReadMessageNumber = 0;
 
-bool hasNewDccMessage() {
+bool hasNewMessage() {
   bool changed = (lastReadMessageNumber != currentMessageNumber);
   if (changed) {
     lastReadMessageNumber = currentMessageNumber;
@@ -80,7 +84,7 @@ ISR(TIMER0_COMPA_vect) {
   TCCR0B = 0; // Stop the timer
 
   // Read bit value: If it's still low, then it was a long 0 wave; if it has changed to 1, it was a short 1 wave
-  bool bitValue = (PINB & (1 << PINB2)) != 0;
+  bool bitValue = (PINB & DCC_PIN_MASK);
   switch (receiveState) {
     case DCC_RECEIVE_STATE_PREAMBLE0:
     case DCC_RECEIVE_STATE_PREAMBLE1:
@@ -102,8 +106,8 @@ ISR(TIMER0_COMPA_vect) {
       // Wait for first 0 bit indicating start of message
       if (!bitValue) {
         receiveState = DCC_RECEIVE_STATE_BYTE_READING_BIT0;
-        dccMessage.length = 0;
-        dccMessage.data[0] = 0;
+        message.length = 0;
+        message.data[0] = 0;
         runningXor = 0;
       }
       break;
@@ -115,12 +119,12 @@ ISR(TIMER0_COMPA_vect) {
     case DCC_RECEIVE_STATE_BYTE_READING_BIT5:
     case DCC_RECEIVE_STATE_BYTE_READING_BIT6:
     case DCC_RECEIVE_STATE_BYTE_READING_BIT7:
-      dccMessage.data[dccMessage.length] = (dccMessage.data[dccMessage.length] << 1) | bitValue;
+      message.data[message.length] = (message.data[message.length] << 1) | bitValue;
       receiveState = DccReceiveState(receiveState + 1);
       break;
     case DCC_RECEIVE_STATE_AWAIT_SEPARATOR:
-      runningXor ^= dccMessage.data[dccMessage.length];
-      dccMessage.length += 1;
+      runningXor ^= message.data[message.length];
+      message.length += 1;
       if (bitValue) {
         // End of packet
         receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
@@ -129,15 +133,17 @@ ISR(TIMER0_COMPA_vect) {
         }
       } else {
         // Another byte follows
-        if (dccMessage.length >= sizeof(dccMessage.data)) {
+        if (message.length >= sizeof(message.data)) {
           // We can't store (nor process) the byte; ignore this message and wait for next preamble
           receiveState = DCC_RECEIVE_STATE_PREAMBLE0;
         } else {
-          dccMessage.data[dccMessage.length] = 0;
+          message.data[message.length] = 0;
           receiveState = DCC_RECEIVE_STATE_BYTE_READING_BIT0;
         }
       }
       break;
 
   }
+}
+
 }

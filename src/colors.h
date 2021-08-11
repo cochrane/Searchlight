@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-namespace Colors {
+namespace colors {
     enum ColorName: int8_t {
         RED = 0,
         GREEN,
@@ -24,7 +24,7 @@ namespace Colors {
     };
 
     // The actually used values for the colors given by the color names.
-    extern Colors::ColorRGB colorValues[];
+    extern colors::ColorRGB colorValues[];
 
     // Ensure the sizes fit so we can work properly with the eeprom
     static_assert(sizeof(ColorRGB) == 3);
