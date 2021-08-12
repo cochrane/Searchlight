@@ -1,6 +1,8 @@
 #include "dccdecode.h"
 
+#ifdef __AVR_ARCH__
 #include <avr/interrupt.h>
+#endif
 
 namespace dccdecode {
 
@@ -13,10 +15,11 @@ volatile Message message;
 volatile uint8_t currentMessageNumber = 0;
 uint8_t lastReadMessageNumber = 0;
 
+#ifdef __AVR_ARCH__
 const uint8_t DCC_PIN_MASK = (1 << PB2);
+#endif
 
-static void receivedBit(bool bitValue);
-
+#ifdef __AVR_ARCH__
 void setupInt0PB2() {
   // PB2: DCC Input  
   PORTB &= ~DCC_PIN_MASK;
@@ -49,6 +52,7 @@ ISR(TIMER0_COMPA_vect) {
   bool bitValue = (PINB & DCC_PIN_MASK);
   receivedBit(bitValue);
 }
+#endif /* __AVR_ARCH__ */
 
 enum DccReceiveState: uint8_t {
    // We are waiting for >= 10 bits that are all 1.
@@ -79,7 +83,7 @@ enum DccReceiveState: uint8_t {
   DCC_RECEIVE_STATE_AWAIT_SEPARATOR
 };
 
-static inline void receivedBit(bool bitValue) {
+void receivedBit(bool bitValue) {
   static DccReceiveState receiveState;
   static uint8_t runningXor = 0;
 

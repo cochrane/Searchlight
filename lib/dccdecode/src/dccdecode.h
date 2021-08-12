@@ -57,7 +57,7 @@ struct Message {
     } else if (length >= 3 && (data[0] & 0xC0) == 0x80) {
       // Long address
       return AddressData{
-        /* .address = */ data[1] | (uint16_t(data[0] & 0x3F) << 8),
+        /* .address = */ static_cast<uint16_t>(data[1] | (uint16_t(data[0] & 0x3F) << 8)),
         /* .commandLength = */ uint8_t(length - 2),
         /* .commandData = */ &data[2]
       };
@@ -73,13 +73,18 @@ struct Message {
 // A safer double-buffer technique is possible but pointless.
 extern volatile Message message;
 
+#ifdef __AVR_ARCH__
 // Called in setup the pin mode and interrupt
 void setupInt0PB2();
 
 // Called in setup to prepare the Timer0 used for DCC reading.
 void setupTimer0();
+#endif
 
 // Returns whether a new DCC message has been received since the last time this function was called.
 bool hasNewMessage();
+
+// Exposed for the purposes of unit-testing only
+void receivedBit(bool bitValue);
 
 }
