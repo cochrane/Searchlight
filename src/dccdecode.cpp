@@ -11,6 +11,7 @@ const uint8_t DCC_WAIT_TIME = (uint16_t(DCC_TIME_ONE) + uint16_t(DCC_TIME_ZERO))
 
 volatile Message message;
 volatile uint8_t currentMessageNumber = 0;
+uint8_t lastReadMessageNumber = 0;
 
 const uint8_t DCC_PIN_MASK = (1 << PB2);
 
@@ -31,14 +32,20 @@ void setupTimer0() {
   TIMSK |= (1 << OCIE0A); // Interrupts on
 }
 
-uint8_t lastReadMessageNumber = 0;
+// Low on DCC in received.
+ISR(INT0_vect) {
+  // Start a timer
+  TCNT0 = 0; // Reset
+  TCCR0B = (1 << CS01); // Start the timer, Clock/8
+}
 
-bool hasNewMessage() {
-  bool changed = (lastReadMessageNumber != currentMessageNumber);
-  if (changed) {
-    lastReadMessageNumber = currentMessageNumber;
-  }
-  return changed;
+// The timer started by ISR(INT0_vect) has fired.
+ISR(TIMER0_COMPA_vect) {
+  TCCR0B = 0; // Stop the timer
+
+  // Read bit value: If it's still low, then it was a long 0 wave; if it has changed to 1, it was a short 1 wave
+  bool bitValue = (PINB & DCC_PIN_MASK);
+  receivedBit(bitValue);
 }
 
 enum DccReceiveState: uint8_t {
@@ -69,22 +76,11 @@ enum DccReceiveState: uint8_t {
   // If it is 0, another byte follows; if it is 1, the message is over.
   DCC_RECEIVE_STATE_AWAIT_SEPARATOR
 };
-DccReceiveState receiveState;
-uint8_t runningXor = 0;
 
-// Low on DCC in received.
-ISR(INT0_vect) {
-  // Start a timer
-  TCNT0 = 0; // Reset
-  TCCR0B = (1 << CS01); // Start the timer, Clock/8
-}
+static inline void receivedBit(bool bitValue) {
+  static DccReceiveState receiveState;
+  static uint8_t runningXor = 0;
 
-// The timer started by ISR(INT0_vect) has fired.
-ISR(TIMER0_COMPA_vect) {
-  TCCR0B = 0; // Stop the timer
-
-  // Read bit value: If it's still low, then it was a long 0 wave; if it has changed to 1, it was a short 1 wave
-  bool bitValue = (PINB & DCC_PIN_MASK);
   switch (receiveState) {
     case DCC_RECEIVE_STATE_PREAMBLE0:
     case DCC_RECEIVE_STATE_PREAMBLE1:
@@ -142,8 +138,16 @@ ISR(TIMER0_COMPA_vect) {
         }
       }
       break;
-
   }
+}
+
+bool hasNewMessage() {
+  uint8_t newMessageNumber = currentMessageNumber;
+  bool changed = (lastReadMessageNumber != newMessageNumber);
+  if (changed) {
+    lastReadMessageNumber = newMessageNumber;
+  }
+  return changed;
 }
 
 }
