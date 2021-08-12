@@ -15,6 +15,8 @@ uint8_t lastReadMessageNumber = 0;
 
 const uint8_t DCC_PIN_MASK = (1 << PB2);
 
+static void receivedBit(bool bitValue);
+
 void setupInt0PB2() {
   // PB2: DCC Input  
   PORTB &= ~DCC_PIN_MASK;
